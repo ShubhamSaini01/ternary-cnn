@@ -9,7 +9,7 @@ import time
 import torch
 import numpy as np
 from torchvision import datasets, transforms
-
+from torch.profiler import profile, ProfilerActivity
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.resnet_ternary import ternary_resnet18_cifar
 
@@ -33,16 +33,30 @@ def get_test_loader(batch_size=1):
     return torch.utils.data.DataLoader(
         testset, batch_size=batch_size, shuffle=False, num_workers=0)
 
-
 def benchmark_single_inference(model, input_tensor):
     model.eval()
 
-    print(f"Warming up ({WARMUP_RUNS} runs)...")
+    # Warmup (keep this)
     with torch.no_grad():
         for _ in range(WARMUP_RUNS):
             _ = model(input_tensor)
 
-    print(f"Benchmarking ({BENCHMARK_RUNS} runs)...")
+    # 🔥 PROFILING (THIS IS THE NEW PART)
+    print("\n[Profiling single inference]\n")
+
+    with profile(
+        activities=[ProfilerActivity.CPU],
+        record_shapes=True
+    ) as prof:
+        with torch.no_grad():
+            _ = model(input_tensor)
+
+    print(prof.key_averages().table(
+        sort_by="self_cpu_time_total",
+        row_limit=20
+    ))
+
+    # Keep your original timing (optional but useful)
     times = []
     with torch.no_grad():
         for _ in range(BENCHMARK_RUNS):
@@ -52,6 +66,7 @@ def benchmark_single_inference(model, input_tensor):
             times.append((end - start) * 1000)
 
     times = np.array(times)
+
     return {
         'mean_ms': np.mean(times),
         'median_ms': np.median(times),
@@ -61,6 +76,33 @@ def benchmark_single_inference(model, input_tensor):
         'p95_ms': np.percentile(times, 95),
         'p99_ms': np.percentile(times, 99),
     }
+# def benchmark_single_inference(model, input_tensor):
+#     model.eval()
+
+#     print(f"Warming up ({WARMUP_RUNS} runs)...")
+#     with torch.no_grad():
+#         for _ in range(WARMUP_RUNS):
+#             _ = model(input_tensor)
+
+#     print(f"Benchmarking ({BENCHMARK_RUNS} runs)...")
+#     times = []
+#     with torch.no_grad():
+#         for _ in range(BENCHMARK_RUNS):
+#             start = time.perf_counter()
+#             _ = model(input_tensor)
+#             end = time.perf_counter()
+#             times.append((end - start) * 1000)
+
+#     times = np.array(times)
+#     return {
+#         'mean_ms': np.mean(times),
+#         'median_ms': np.median(times),
+#         'std_ms': np.std(times),
+#         'min_ms': np.min(times),
+#         'max_ms': np.max(times),
+#         'p95_ms': np.percentile(times, 95),
+#         'p99_ms': np.percentile(times, 99),
+#     }
 
 
 def benchmark_batch_throughput(model, loader, num_batches=50):

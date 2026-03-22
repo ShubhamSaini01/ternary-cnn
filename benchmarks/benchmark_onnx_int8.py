@@ -60,8 +60,8 @@ def export_to_onnx():
         input_names=['input'],
         output_names=['output'],
         dynamic_axes={'input': {0: 'batch'}, 'output': {0: 'batch'}},
-        opset_version=17,
-        dynamo=False 
+        opset_version=17
+        #dynamo=False 
     )
     size = os.path.getsize(ONNX_FP32_PATH)
     print(f"  Exported FP32 ONNX: {size / 1e6:.2f} MB")
@@ -143,18 +143,69 @@ def quantize_static():
 
 
 # ─── Benchmarking ─────────────────────────────────────────────
+def benchmark_single_inference(model, input_tensor):
+    model.eval()
+
+    # Warmup (keep this)
+    with torch.no_grad():
+        for _ in range(WARMUP_RUNS):
+            _ = model(input_tensor)
+
+    # 🔥 PROFILING (THIS IS THE NEW PART)
+    print("\n[Profiling single inference]\n")
+
+    with profile(
+        activities=[ProfilerActivity.CPU],
+        record_shapes=True
+    ) as prof:
+        with torch.no_grad():
+            _ = model(input_tensor)
+
+    print(prof.key_averages().table(
+        sort_by="self_cpu_time_total",
+        row_limit=20
+    ))
+
+    # Keep your original timing (optional but useful)
+    times = []
+    with torch.no_grad():
+        for _ in range(BENCHMARK_RUNS):
+            start = time.perf_counter()
+            _ = model(input_tensor)
+            end = time.perf_counter()
+            times.append((end - start) * 1000)
+
+    times = np.array(times)
+
+    return {
+        'mean_ms': np.mean(times),
+        'median_ms': np.median(times),
+        'std_ms': np.std(times),
+        'min_ms': np.min(times),
+        'max_ms': np.max(times),
+        'p95_ms': np.percentile(times, 95),
+        'p99_ms': np.percentile(times, 99),
+    }
 def benchmark_onnx(model_path, label):
     import onnxruntime as ort
+    import json
 
     print(f"\n{'─' * 50}")
     print(f"Benchmarking: {label}")
     print(f"{'─' * 50}")
 
-    # Create session with CPU provider only
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1  # Single-threaded for fair comparison
+    opts.intra_op_num_threads = 1
     opts.inter_op_num_threads = 1
-    session = ort.InferenceSession(model_path, opts, providers=['CPUExecutionProvider'])
+
+    # 🔥 ENABLE PROFILING
+    opts.enable_profiling = True
+
+    session = ort.InferenceSession(
+        model_path,
+        opts,
+        providers=['CPUExecutionProvider']
+    )
 
     input_name = session.get_inputs()[0].name
     dummy = np.random.randn(1, 3, 32, 32).astype(np.float32)
@@ -164,8 +215,31 @@ def benchmark_onnx(model_path, label):
     for _ in range(WARMUP_RUNS):
         session.run(None, {input_name: dummy})
 
+    # 🔥 PROFILE ONE RUN
+    print("\n[Profiling ONNX inference]\n")
+    session.run(None, {input_name: dummy})
+
+    profile_file = session.end_profiling()
+
+    # 🔥 Read profiling file
+    with open(profile_file, "r") as f:
+        data = json.load(f)
+
+    op_times = {}
+
+    for entry in data:
+        if entry.get("cat") == "Node":   # 🔥 THIS IS KEY
+            name = entry.get("name", "Unknown")
+            dur = entry.get("dur", 0)    # microseconds
+
+            op_times[name] = op_times.get(name, 0) + dur
+
+    print("\nTop operators:")
+    for op, t in sorted(op_times.items(), key=lambda x: -x[1])[:10]:
+        print(f"{op:30s} {t/1000:.3f} ms")
+
     # Benchmark
-    print(f"  Benchmarking ({BENCHMARK_RUNS} runs)...")
+    print(f"\n  Benchmarking ({BENCHMARK_RUNS} runs)...")
     times = []
     for _ in range(BENCHMARK_RUNS):
         start = time.perf_counter()
@@ -174,6 +248,7 @@ def benchmark_onnx(model_path, label):
         times.append((end - start) * 1000)
 
     times = np.array(times)
+
     print(f"  Mean:   {np.mean(times):.3f} ms")
     print(f"  Median: {np.median(times):.3f} ms")
     print(f"  Std:    {np.std(times):.3f} ms")
@@ -181,6 +256,44 @@ def benchmark_onnx(model_path, label):
     print(f"  P95:    {np.percentile(times, 95):.3f} ms")
 
     return np.median(times)
+# def benchmark_onnx(model_path, label):
+#     import onnxruntime as ort
+
+#     print(f"\n{'─' * 50}")
+#     print(f"Benchmarking: {label}")
+#     print(f"{'─' * 50}")
+
+#     # Create session with CPU provider only
+#     opts = ort.SessionOptions()
+#     opts.intra_op_num_threads = 1  # Single-threaded for fair comparison
+#     opts.inter_op_num_threads = 1
+#     session = ort.InferenceSession(model_path, opts, providers=['CPUExecutionProvider'])
+
+#     input_name = session.get_inputs()[0].name
+#     dummy = np.random.randn(1, 3, 32, 32).astype(np.float32)
+
+#     # Warmup
+#     print(f"  Warming up ({WARMUP_RUNS} runs)...")
+#     for _ in range(WARMUP_RUNS):
+#         session.run(None, {input_name: dummy})
+
+#     # Benchmark
+#     print(f"  Benchmarking ({BENCHMARK_RUNS} runs)...")
+#     times = []
+#     for _ in range(BENCHMARK_RUNS):
+#         start = time.perf_counter()
+#         session.run(None, {input_name: dummy})
+#         end = time.perf_counter()
+#         times.append((end - start) * 1000)
+
+#     times = np.array(times)
+#     print(f"  Mean:   {np.mean(times):.3f} ms")
+#     print(f"  Median: {np.median(times):.3f} ms")
+#     print(f"  Std:    {np.std(times):.3f} ms")
+#     print(f"  Min:    {np.min(times):.3f} ms")
+#     print(f"  P95:    {np.percentile(times, 95):.3f} ms")
+
+#     return np.median(times)
 
 
 def evaluate_onnx_accuracy(model_path, label):
