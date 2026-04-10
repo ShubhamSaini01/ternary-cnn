@@ -256,4 +256,139 @@ oneDNN uses fused implicit GEMM that avoids im2col/repack entirely (~21% of our 
 
 CIFAR-10 activations (32–64KB) already fit in L1 cache. Halving them to 16–32KB provides zero cache benefit. The unpack + nibble extraction overhead far exceeds any bandwidth savings.
 
-**Takeaway**: "Fewer bytes" doesn't mean "faster" when the data already fits in cache. The proven two-step approach (memcpy im2col + SIMD repack) is hard to beat because bulk memory operations are extremely efficient on modern CPUs. Fused single-pass approaches with scalar element access lose to sequential vectorized passes.
+**Takeaway**: "Fewer bytes" doesn't mean "faster" when the data already fits in cache. The proven two-pass approach (memcpy im2col + SIMD repack) is hard to beat because bulk memory operations are extremely efficient on modern CPUs. Fused single-pass approaches with scalar element access lose to sequential vectorized passes.
+
+---
+
+## Experiment 20: MLAS Assembly Analysis — Why We Lose to ONNX INT8 Static
+
+**Goal**: Understand the 13% gap at 6T (0.99ms vs 0.88ms) by comparing our GEMM assembly against the actual hot kernel in ONNX Runtime's MLAS.
+
+**Method**: `perf record` on ONNX Runtime INT8 Static (1T, 5000 runs, 611K samples) + `objdump` of both binaries. All addresses verified against perf hotspot data.
+
+### Identifying the MLAS hot kernel
+
+perf report shows ~85% of cycles in address range `0xf14300-0xf14950`. All other functions (including any im2col-like data prep) are below 0.2% individually. The function `blas_thread_server` (MLAS thread pool) accounts for 7.34%.
+
+This means **MLAS spends almost nothing on data preparation** — the GEMM kernel dominates completely.
+
+### MLAS GEMM inner loop (from disassembly at 0xf1434c)
+
+```asm
+; Main loop — 6-OC x 16-N, unrolled 4x over K dimension
+; Accumulators: ymm4-ymm15 (12 registers = 6 OC x 2 spatial groups of 8)
+; Activation data pointer: rdx
+; Weight base pointer: r10, OC strides: r11-r15 (precomputed deltas)
+
+.loop:
+  vmovdqu    (%rdx), ymm0          ; load 8 activation positions (group 0)
+  vmovdqu  0x20(%rdx), ymm1        ; load 8 activation positions (group 1)
+
+  ; --- OC 0 ---
+  vpbroadcastd (%r10), ymm2        ; broadcast 4 weight bytes for OC 0
+  vpdpbusds  ymm0, ymm2, ymm4     ; accumulate OC 0, spatial 0-7
+  vpdpbusds  ymm1, ymm2, ymm5     ; accumulate OC 0, spatial 8-15
+
+  ; --- OC 1 ---
+  vpbroadcastd (%r10,%r11), ymm2   ; broadcast weights OC 1 via stride offset
+  vpdpbusds  ymm0, ymm2, ymm6
+  vpdpbusds  ymm1, ymm2, ymm7
+
+  ; --- OC 2-5: same pattern using r12, r13, r14, r15 ---
+  ; ...ymm8-ymm15
+
+  ; UNROLLED 3 more times: loads at +0x40, +0x80, +0xC0
+  ; (same 6-OC x 2-spatial pattern, 4 K-steps total)
+
+  add  $0x10, %r10                 ; advance weight pointer (4 x 4 bytes)
+  add  $0x100, %rdx                ; advance activation pointer (4 x 64 bytes)
+  sub  $0x10, %rax                 ; K counter -= 16
+  jae  .loop
+```
+
+### Our GEMM inner loop (from disassembly at 0x6b40)
+
+```asm
+; Main loop — 14-OC x 8-N, no K unrolling
+; Accumulators: ymm1-ymm14 (14 registers)
+; Activation: ymm0 loaded from col_packed via rdx
+; Weight: ymm15 broadcast per OC
+
+.loop:
+  vmovdqu   (%rdx), ymm0           ; load 8 spatial positions (32 bytes)
+  add       $0x20, %rdx
+
+  ; --- OC 0 ---
+  vpbroadcastd (%rcx,%rax,4), ymm15
+  mov       0x190(%rsp), %rcx      ; *** STACK SPILL: reload OC pointer ***
+  vpdpbusd  ymm15, ymm0, ymm1
+
+  ; --- OC 1 ---
+  vpbroadcastd (%rcx,%rax,4), ymm15
+  mov       0x188(%rsp), %rcx      ; *** STACK SPILL: reload OC pointer ***
+  vpdpbusd  ymm15, ymm0, ymm2
+
+  ; --- OC 2-7: use rbx, r12, r13, r14, r15, r11 (no spills) ---
+  vpbroadcastd (%rbx,%rax,4), ymm15
+  vpdpbusd  ymm15, ymm0, ymm3
+  ; ... clean pairs through ymm8
+
+  ; --- OC 8-13: use r10, r9, r8, rdi, rsi (no spills) ---
+  ; ... through ymm14
+
+  ; loop tail
+  inc  %rax
+  cmp  %rax, <limit>
+  jne  .loop
+```
+
+### Differences identified from assembly
+
+| Aspect | MLAS | Our Engine |
+|--------|------|------------|
+| **OC tile** | 6 | 14 |
+| **Spatial tile** | 16 (two YMM loads per iteration) | 8 (one YMM load per iteration) |
+| **K unrolling** | 4x (processes 4 K-steps per loop iteration) | 1x (one K-step per iteration) |
+| **Accumulators** | 12 YMM (ymm4-15), zero spills | 14 YMM (ymm1-14), 2 pointer reloads + 1 loop cmp from stack |
+| **dpbusd per loop iter** | 48 (6 OC x 2 spatial x 4 K-unroll) | 14 (14 OC x 1 spatial x 1 K) |
+| **Branch frequency** | 1 branch per 48 dpbusd | 1 branch per 14 dpbusd |
+| **Weight addressing** | Stride offsets from single base (r10+r11..r15) | Individual pointers, 2 via stack reload |
+| **Instruction** | `vpdpbusds` (saturating) | `vpdpbusd` (non-saturating) |
+| **Activation format** | Pre-packed into VNNI-friendly layout (64-byte aligned groups) | Spatial-packed col_packed buffer |
+
+### Why MLAS wins: three root causes
+
+**1. No im2col + repack overhead (indirection buffer architecture)**
+
+Confirmed from MLAS source (`convsym.cpp`): MLAS does not do im2col. It uses an **indirection buffer** — a precomputed array of `OutputCount * KernelSize` pointers, each pointing directly into the input tensor. The GEMM kernel dereferences these pointers to load input data. No intermediate buffer, no repack pass, no barriers.
+
+Our engine: im2col (memcpy rows into 4.6MB col_u8) → barrier → repack into 4.6MB col_packed → barrier → GEMM. That's 9.2MB of intermediate writes+reads and 3 OMP barriers per layer (57 per inference, 23% of 6T CPU time in libgomp spin-wait).
+
+At CIFAR-10 scale, the input tensor fits in L2 cache, so MLAS's scattered pointer dereferences are nearly free. Our sequential im2col is fast for the copy itself, but the barrier overhead at 6T and the total data movement dominate.
+
+**2. 4x K-unrolling reduces branch overhead and improves instruction-level parallelism**
+
+MLAS processes 4 K-steps per loop iteration (48 dpbusd instructions between branches). Our engine does 1 K-step (14 dpbusd between branches). At 3.4x fewer branches, MLAS gives the out-of-order engine a much larger window to schedule instructions and hide load latency.
+
+**3. 16-N spatial tile doubles activation reuse**
+
+MLAS loads 16 spatial positions (two `vmovdqu`) and applies 6 OC weight broadcasts to each. That's 12 dpbusd per activation load pair. Our engine loads 8 spatial positions (one `vmovdqu`) and applies 14 weight broadcasts — 14 dpbusd per activation load. MLAS gets 2x more spatial positions per weight load. This matters because weight broadcasts from memory are the main bottleneck on the load ports.
+
+### Architectural insight
+
+MLAS chose **wide spatial (16-N) x narrow OC (6)** tiling. We chose **narrow spatial (8-N) x wide OC (14)**. Both use all 16 YMM registers. But MLAS's choice:
+- Eliminates all register spills (6 OC pointers fit in r10-r15)
+- Enables 4x K-unrolling (fewer accumulators → room for unroll state)
+- Doubles spatial work per activation load
+
+Our 14-OC tile was optimal in our OC tile sweep (Experiment in optimization_journey_detailed.html, step 20), but the sweep only tested OC width with 8-N spatial fixed. We never tested 16-N spatial with narrower OC.
+
+### What this means for next steps
+
+The two independent optimization paths are:
+1. **Eliminate im2col/repack**: Adopt MLAS's indirection buffer approach. Precompute pointer array once per layer, dereference inside GEMM. Removes 9.2MB data movement and 57 barriers per inference.
+2. **Retile GEMM to 6-OC x 16-N with 4x K-unrolling**: Matches MLAS's proven microarchitectural sweet spot. Eliminates stack spills, reduces branch frequency 3.4x.
+
+These are independent changes. Either could close part of the 13% gap; both together could potentially match MLAS.
+
+**Takeaway**: At small spatial sizes (CIFAR-10), the data preparation overhead (im2col + barriers) matters more than GEMM tile efficiency. MLAS wins not because its GEMM is dramatically better instruction-for-instruction, but because it does almost zero work outside the GEMM.

@@ -93,6 +93,55 @@ The single-threaded engine was at 3.71ms. With OpenMP parallelism at 6 threads: 
 
 All numbers at 6 threads, median over 200 runs. The ternary engine is 2.6x faster than ONNX INT8 Dynamic and within 13% of ONNX INT8 Static, while using a model 3.2x smaller. The accuracy cost is about 1% compared to FP32. Total workspace memory is 9216 KB, preallocated and reused per inference.
 
+## Reverse-Engineering the Gap: Assembly-Level Comparison
+
+We are 13% behind ONNX INT8 Static at 6 threads (0.99ms vs 0.88ms). I wanted to understand exactly why, so I disassembled both binaries and profiled with `perf record` (611K samples).
+
+First surprise: MLAS spends **85% of its cycles in the GEMM kernel**. Data preparation (anything resembling im2col) is below 0.2% of samples. Our engine spends 28% on im2col + repack before GEMM even starts.
+
+Reading the MLAS source code (`convsym.cpp` from ONNX Runtime 1.23.2), I found the answer: **MLAS does not do im2col at all.** It uses an indirection buffer — a precomputed array of pointers, each pointing directly into the input tensor. The GEMM kernel dereferences these pointers to gather input data. No intermediate buffer. No copy. No repack. No barriers between threads.
+
+Our engine copies 4.6MB into `col_u8`, then repacks another 4.6MB into `col_packed`, with OMP barriers between each stage. At 6 threads, those barriers eat 23% of CPU time in libgomp spin-wait.
+
+The GEMM kernels themselves also differ. Here is what each inner loop looks like:
+
+**MLAS (6-OC x 16-N, 4x K-unrolled):**
+```asm
+vmovdqu    (%rdx), ymm0           ; 8 spatial positions
+vmovdqu  0x20(%rdx), ymm1         ; 8 more positions (16 total)
+vpbroadcastd (%r10), ymm2         ; weight OC 0
+vpdpbusds  ymm0, ymm2, ymm4      ; accumulate
+vpdpbusds  ymm1, ymm2, ymm5
+vpbroadcastd (%r10,%r11), ymm2    ; weight OC 1 (stride offset)
+vpdpbusds  ymm0, ymm2, ymm6
+vpdpbusds  ymm1, ymm2, ymm7
+; ... 6 OCs total, then unrolled 3 more times
+; 48 dpbusd between branches, zero register spills
+```
+
+**Our engine (14-OC x 8-N, no K-unrolling):**
+```asm
+vmovdqu   (%rdx), ymm0            ; 8 spatial positions
+vpbroadcastd (%rcx,%rax,4), ymm15 ; weight OC 0
+mov       0x190(%rsp), %rcx       ; reload pointer from stack (spill!)
+vpdpbusd  ymm15, ymm0, ymm1
+vpbroadcastd (%rcx,%rax,4), ymm15 ; weight OC 1
+mov       0x188(%rsp), %rcx       ; another stack reload
+vpdpbusd  ymm15, ymm0, ymm2
+; ... 14 OCs total
+; 14 dpbusd between branches, 2 register spills per iteration
+```
+
+Three differences explain the gap:
+
+**1. Data preparation.** MLAS: zero-cost indirection pointers. Us: 9.2MB of im2col + repack + 57 OMP barriers. This is the biggest factor at 6T.
+
+**2. K-unrolling.** MLAS processes 4 K-steps per loop iteration (48 dpbusd per branch). We do 1 (14 dpbusd per branch). Fewer branches means more instruction-level parallelism for the out-of-order engine.
+
+**3. Spatial width.** MLAS loads 16 positions, we load 8. MLAS gets 2x the spatial work per weight broadcast. We chose wide OC (14) to maximize weight reuse, but that costs 2 register spills to stack — MLAS's 6 OC pointers fit cleanly in r10-r15.
+
+The fundamental trade-off: MLAS chose **wide spatial, narrow OC**. We chose **narrow spatial, wide OC**. Both saturate the 16 YMM registers. But MLAS's choice eliminates spills, enables deeper unrolling, and pairs naturally with the indirection buffer (which provides scattered spatial access for free).
+
 ## What I Actually Learned
 
 **Most "optimizations" make things worse.** Of 19 experiments, more than half resulted in slower performance. Fused implicit GEMM sounded brilliant and was 6x slower than the naive approach. INT16 add/sub seemed like a natural fit for ternary and was 17x slower than dpbusd. 4-bit packing should have saved memory bandwidth and cost 3x more instructions.
