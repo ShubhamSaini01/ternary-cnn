@@ -1,116 +1,149 @@
 #include <cstdio>
 #include <cstdlib>
-#include <chrono>
-#include <numeric>
-#include <algorithm>
-#include <vector>
+#include <cstring>
 #include <cmath>
-#include "ternary_engine.h"
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <chrono>
+#include "engine.h"
 
-static const float MEAN[3] = {0.4914f, 0.4822f, 0.4465f};
-static const float STD[3]  = {0.2023f, 0.1994f, 0.2010f};
+// ─── CIFAR-10 test data loader ──────────────────────────────
 
-Tensor make_random_input(int batch = 1) {
-    Tensor input(batch, 3, 32, 32);
-    srand(42);
-    for (int i = 0; i < input.total(); i++) {
-        int c = (i / (32 * 32)) % 3;
-        float raw = static_cast<float>(rand()) / RAND_MAX;
-        input.data[i] = (raw - MEAN[c]) / STD[c];
+struct TestData {
+    std::vector<std::vector<float>> images;  // each: 3*32*32 normalized
+    std::vector<int> labels;
+};
+
+static TestData load_cifar10_batch(const char* path) {
+    TestData td;
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "Cannot open: %s\n", path);
+        return td;
     }
-    return input;
+
+    // Our binary format: [uint32 count][per image: uint32 label, float32[3*32*32] normalized pixels]
+    uint32_t count;
+    if (fread(&count, 4, 1, f) != 1) { fclose(f); return td; }
+
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t label;
+        if (fread(&label, 4, 1, f) != 1) break;
+        td.labels.push_back(label);
+
+        std::vector<float> img(3 * 32 * 32);
+        if (fread(img.data(), 4, 3 * 32 * 32, f) != 3 * 32 * 32) break;
+        td.images.push_back(std::move(img));
+    }
+
+    fclose(f);
+    printf("Loaded %zu test images from %s\n", td.images.size(), path);
+    return td;
 }
 
-int argmax(const Tensor& logits, int sample = 0) {
-    int num_classes = logits.c;
-    int best = 0;
-    float best_val = logits.at(sample, 0, 0, 0);
-    for (int i = 1; i < num_classes; i++) {
-        float val = logits.at(sample, i, 0, 0);
-        if (val > best_val) { best_val = val; best = i; }
-    }
-    return best;
+static Tensor make_input(const std::vector<float>& img) {
+    Tensor t(1, 3, 32, 32);
+    memcpy(t.data.data(), img.data(), 3 * 32 * 32 * sizeof(float));
+    return t;
 }
 
-int main(int argc, char* argv[]) {
-    const char* model_path = "export/ternary_resnet18.bin";
-    int warmup_runs = 50;
-    int benchmark_runs = 200;
+static int argmax(const std::vector<float>& v) {
+    return std::max_element(v.begin(), v.end()) - v.begin();
+}
 
-    if (argc > 1) model_path = argv[1];
-    if (argc > 2) warmup_runs = atoi(argv[2]);
-    if (argc > 3) benchmark_runs = atoi(argv[3]);
+// ─── Main ───────────────────────────────────────────────────
 
-    printf("============================================================\n");
-    printf("Ternary CNN — C++ SIMD Inference Benchmark (Profiled)\n");
-    printf("============================================================\n\n");
-
-    TernaryResNet18 engine;
-    if (!engine.load(model_path)) return 1;
-
-    Tensor input = make_random_input(1);
-    printf("Input shape: [1, 3, 32, 32]\n\n");
-
-    // Sanity check
-    {
-        Tensor logits = engine.forward(input);
-        printf("Sanity check — logits: [");
-        for (int i = 0; i < 10; i++)
-            printf("%.4f%s", logits.at(0, i, 0, 0), i < 9 ? ", " : "");
-        printf("]\nPredicted class: %d\n\n", argmax(logits));
+int main(int argc, char** argv) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <model.bin> <scales.json> [test_batch_path] [warmup] [runs]\n", argv[0]);
+        return 1;
     }
+
+    const char* model_path = argv[1];
+    const char* scales_path = argv[2];
+    const char* test_path = argc > 3 ? argv[3] : nullptr;
+    int warmup = argc > 4 ? atoi(argv[4]) : 50;
+    int runs = argc > 5 ? atoi(argv[5]) : 200;
+
+    // Load model
+    Model m = load_model(model_path);
+    Engine engine;
+    engine.init(m, scales_path);
+
+    // ─── Accuracy test ──────────────────────────────────────
+    if (test_path) {
+        printf("\n══════════════════════════════════════════════\n");
+        printf("ACCURACY TEST\n");
+        printf("══════════════════════════════════════════════\n");
+
+        TestData td = load_cifar10_batch(test_path);
+        if (td.images.empty()) {
+            fprintf(stderr, "No test data loaded\n");
+            return 1;
+        }
+
+        int correct = 0;
+        size_t num_test = td.images.size();
+
+        // Check for --quick flag or env var to limit test images
+        const char* quick_env = getenv("QUICK_TEST");
+        if (quick_env) num_test = std::min(num_test, (size_t)atoi(quick_env));
+
+        for (size_t i = 0; i < num_test; i++) {
+            Tensor input = make_input(td.images[i]);
+            auto output = engine.forward(input);
+            int pred = argmax(output);
+            if (pred == td.labels[i]) correct++;
+
+            if ((i + 1) % 500 == 0 || i + 1 == num_test) {
+                printf("  %zu/%zu  acc=%.2f%%\n", i + 1, num_test,
+                       100.0 * correct / (i + 1));
+            }
+        }
+
+        double acc = 100.0 * correct / num_test;
+        printf("\nOverall: %d/%zu = %.2f%%\n", correct, num_test, acc);
+    }
+
+    // ─── Latency benchmark ──────────────────────────────────
+    printf("\n══════════════════════════════════════════════\n");
+    printf("LATENCY BENCHMARK\n");
+    printf("══════════════════════════════════════════════\n");
+
+    // Create dummy input
+    Tensor dummy(1, 3, 32, 32);
+    for (auto& v : dummy.data) v = 0.1f;
 
     // Warmup
-    printf("Warming up (%d runs)...\n", warmup_runs);
-    for (int i = 0; i < warmup_runs; i++)
-        engine.forward(input);
+    printf("Warming up (%d runs)...\n", warmup);
+    for (int i = 0; i < warmup; i++) {
+        engine.forward(dummy);
+    }
 
     // Benchmark
-    printf("Benchmarking single image (%d runs)...\n", benchmark_runs);
-    std::vector<double> times(benchmark_runs);
-
-    // Reset profiler and accumulate over all benchmark runs
     engine.reset_profile();
-
-    for (int i = 0; i < benchmark_runs; i++) {
+    printf("Benchmarking (%d runs)...\n", runs);
+    std::vector<double> times(runs);
+    for (int i = 0; i < runs; i++) {
         auto start = std::chrono::high_resolution_clock::now();
-        Tensor logits = engine.forward(input);
+        engine.forward(dummy);
         auto end = std::chrono::high_resolution_clock::now();
         times[i] = std::chrono::duration<double, std::milli>(end - start).count();
     }
 
-    // Latency stats
     std::sort(times.begin(), times.end());
-    double sum = std::accumulate(times.begin(), times.end(), 0.0);
-    double mean = sum / benchmark_runs;
-    double median = times[benchmark_runs / 2];
+    double median = times[runs / 2];
+    double mean = std::accumulate(times.begin(), times.end(), 0.0) / runs;
+    double p95 = times[(int)(runs * 0.95)];
+    double min_t = times[0];
 
-    double var = 0;
-    for (auto t : times) var += (t - mean) * (t - mean);
-    double std_dev = sqrt(var / benchmark_runs);
-
-    printf("\n────────────────────────────────────────\n");
-    printf("Single Image Latency (batch_size=1)\n");
-    printf("────────────────────────────────────────\n");
+    printf("\n  Median: %.3f ms\n", median);
     printf("  Mean:   %.3f ms\n", mean);
-    printf("  Median: %.3f ms\n", median);
-    printf("  Std:    %.3f ms\n", std_dev);
-    printf("  Min:    %.3f ms\n", times.front());
-    printf("  Max:    %.3f ms\n", times.back());
-    printf("  P95:    %.3f ms\n", times[(int)(benchmark_runs * 0.95)]);
-    printf("  P99:    %.3f ms\n", times[(int)(benchmark_runs * 0.99)]);
+    printf("  Min:    %.3f ms\n", min_t);
+    printf("  P95:    %.3f ms\n", p95);
 
-    // Print profile (averaged over benchmark_runs)
-    engine.print_profile();
-    printf("(Profile times are totals over %d runs. Divide by %d for per-inference.)\n",
-           benchmark_runs, benchmark_runs);
-
-    printf("\n============================================================\n");
-    printf("SUMMARY\n");
-    printf("============================================================\n");
-    printf("  Latency (median): %.3f ms\n", median);
-    printf("  Throughput:       %.1f img/s\n", 1000.0 / median);
-    printf("============================================================\n");
+    engine.print_profile(runs);
 
     return 0;
 }

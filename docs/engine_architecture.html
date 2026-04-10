@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ternary CNN Inference Engine — Architecture & Design Decisions</title>
+<style>
+@page { size: A4; margin: 15mm; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: #1a1a2e; font-size: 11px; line-height: 1.5; padding: 20px; max-width: 210mm; margin: 0 auto; }
+h1 { font-size: 22px; color: #0f172a; margin-bottom: 4px; border-bottom: 3px solid #2563eb; padding-bottom: 6px; }
+h2 { font-size: 16px; color: #1e40af; margin: 18px 0 8px 0; border-left: 4px solid #2563eb; padding-left: 8px; page-break-after: avoid; }
+h3 { font-size: 13px; color: #334155; margin: 10px 0 4px 0; }
+p, li { font-size: 11px; }
+.subtitle { font-size: 12px; color: #64748b; margin-bottom: 16px; }
+
+/* Flow diagram */
+.flow { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
+.flow-row { display: flex; align-items: stretch; gap: 2px; }
+.flow-box { border-radius: 6px; padding: 6px 8px; font-size: 10px; line-height: 1.4; flex: 1; }
+.flow-arrow { display: flex; align-items: center; justify-content: center; font-size: 14px; color: #94a3b8; width: 20px; flex-shrink: 0; }
+.flow-arrow-down { text-align: center; font-size: 14px; color: #94a3b8; padding: 1px 0; }
+
+.fp32 { background: #fef3c7; border: 1.5px solid #f59e0b; }
+.u8 { background: #d1fae5; border: 1.5px solid #10b981; }
+.i8 { background: #e0e7ff; border: 1.5px solid #6366f1; }
+.i32 { background: #fce7f3; border: 1.5px solid #ec4899; }
+.op { background: #f1f5f9; border: 1.5px solid #94a3b8; }
+.simd { background: #ede9fe; border: 1.5px solid #7c3aed; }
+.decision { background: #fef2f2; border: 1.5px solid #ef4444; }
+.win { background: #ecfdf5; border: 1.5px solid #059669; }
+
+.tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; margin-right: 3px; }
+.tag-fp32 { background: #fef3c7; color: #92400e; }
+.tag-u8 { background: #d1fae5; color: #065f46; }
+.tag-i8 { background: #e0e7ff; color: #3730a3; }
+.tag-i32 { background: #fce7f3; color: #9d174d; }
+.tag-simd { background: #ede9fe; color: #5b21b6; }
+
+table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 10px; }
+th { background: #f1f5f9; padding: 4px 6px; text-align: left; font-weight: 600; border: 1px solid #e2e8f0; }
+td { padding: 3px 6px; border: 1px solid #e2e8f0; }
+tr:nth-child(even) { background: #f8fafc; }
+
+.cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.card { border: 1.5px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+.card h3 { margin-top: 0; }
+
+code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-family: 'Consolas', monospace; font-size: 10px; }
+pre { background: #1e293b; color: #e2e8f0; padding: 8px; border-radius: 6px; font-size: 10px; line-height: 1.4; overflow-x: auto; font-family: 'Consolas', monospace; margin: 6px 0; }
+.mono { font-family: 'Consolas', monospace; }
+
+.page-break { page-break-before: always; }
+.no-break { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<h1>Ternary CNN Inference Engine</h1>
+<p class="subtitle">Architecture, Data Flow & Design Decisions &mdash; ResNet-18 on CIFAR-10 &mdash; Intel i5-13400F (AVX2+VNNI)</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>1. Complete Data Flow (Single Inference)</h2>
+
+<div class="flow no-break">
+  <div class="flow-row">
+    <div class="flow-box fp32" style="flex:2;">
+      <strong>INPUT</strong><br>
+      <span class="tag tag-fp32">FP32</span> Tensor [1, 3, 32, 32] = 12 KB<br>
+      CIFAR-10 normalized: range [-2.18, +2.70]
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr;</div>
+  <div class="flow-row">
+    <div class="flow-box op">
+      <strong>Conv1 (FP32)</strong> &mdash; 3&rarr;64ch, 3&times;3, s1p1<br>
+      <span class="tag tag-fp32">FP32</span> im2col [27 &times; 1024] = 108 KB<br>
+      <span class="tag tag-simd">AVX2 FMA</span> fmadd_ps, 8 floats/cycle<br>
+      BN fused: scale folded into weights, bias adjusted
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box fp32">
+      <span class="tag tag-fp32">FP32</span> [1, 64, 32, 32] = 256 KB<br>
+      range [-0.85, 1.15], mean 0.02
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr; ReLU (in-place AVX2 maxps)</div>
+  <div class="flow-row">
+    <div class="flow-box op">
+      <strong>Quantize FP32 &rarr; UINT8</strong><br>
+      <span class="tag tag-simd">AVX2</span> cvtps &rarr; packus (8 vals/iter)<br>
+      scale = 0.009273 (calibrated offline)<br>
+      u8 = round(fp32 / scale), clamp [0, 255]
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box u8">
+      <span class="tag tag-u8">UINT8</span> [1, 64, 32, 32] = <strong>64 KB</strong><br>
+      range [0, 124], 59% zeros, scale=0.0093<br>
+      <em>All activations stay uint8 from here</em>
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr; Enters INT8-resident pipeline (8 ResNet blocks)</div>
+</div>
+
+<div class="card no-break" style="border-color: #2563eb; margin: 8px 0;">
+<h3 style="color:#1e40af;">Per-Block Pipeline (repeated 8 times)</h3>
+<div class="flow">
+  <div class="flow-row">
+    <div class="flow-box u8" style="flex:1.5;">
+      <strong>Block Input x</strong><br>
+      <span class="tag tag-u8">UINT8</span> [1, C, H, W]<br>
+      + scale (float32)
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box op" style="flex:3;">
+      <strong>STEP 1: im2col</strong> (uint8 byte copies)<br>
+      3&times;3 s1p1 specialized: memcpy per row (no per-element branches)<br>
+      Output: col_u8 <span class="tag tag-u8">UINT8</span> [col_rows &times; spatial]<br>
+      <em>Layer1: [576 &times; 1024] = 576 KB</em>
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr;</div>
+  <div class="flow-row">
+    <div class="flow-box simd" style="flex:3;">
+      <strong>STEP 2: SSE Repack</strong> (spatial-packed layout for dpbusd)<br>
+      4 loads + 3 shuffles + 2 stores per 32-byte block<br>
+      <code>unpacklo_epi8 &rarr; unpacklo_epi16</code> = 4&times;8 byte transpose<br>
+      Output: col_packed <span class="tag tag-u8">UINT8</span> [jg &times; kg &times; 32B]<br>
+      <em>Layer1: [128 &times; 144 &times; 32] = 576 KB</em>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box" style="flex:2; background:#fff7ed; border-color:#ea580c;">
+      <strong>Memory Layout</strong><br>
+      <code>packed[jg][kg][32B]</code><br>
+      32B = 8 spatial &times; 4 reduction<br>
+      <code>[s0r0 s0r1 s0r2 s0r3<br>&nbsp;s1r0 s1r1 s1r2 s1r3<br>&nbsp;... s7r0 s7r1 s7r2 s7r3]</code>
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr;</div>
+  <div class="flow-row">
+    <div class="flow-box simd" style="flex:3;">
+      <strong>STEP 3: dpbusd GEMM</strong> (16-OC tiling)<br>
+      <span class="tag tag-simd">AVX-VNNI</span> <code>_mm256_dpbusd_epi32(acc, act_u8, wt_s8_broadcast)</code><br>
+      32 MACs per instruction, 1-cycle throughput<br>
+      Weights <span class="tag tag-i8">INT8</span> {-1,0,+1} packed as int32 (4 per word, broadcast)<br>
+      Accumulator: <span class="tag tag-i32">INT32</span> &times; 16 OCs in YMM registers
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box i32" style="flex:2;">
+      <span class="tag tag-i32">INT32</span> accumulators<br>
+      16 OCs &times; 8 spatial<br>
+      = 16 YMM registers<br>
+      (all 16 used &mdash; at register limit)
+    </div>
+  </div>
+  <div class="flow-arrow-down">&darr;</div>
+  <div class="flow-row">
+    <div class="flow-box op" style="flex:3;">
+      <strong>STEP 4: Fused Epilogue</strong> (inside GEMM output loop, zero extra passes)<br>
+      <strong>Mode 1 (conv1):</strong> i32 &rarr; f32 (dequant &times; scale + bias) &rarr; ReLU &rarr; u8<br>
+      <strong>Mode 2 (conv2):</strong> i32 &rarr; f32 &rarr; <em>+ residual</em> &rarr; ReLU &rarr; u8<br>
+      Dequant: <code>real = int32_acc &times; act_scale &times; oc_scale[oc] + oc_bias[oc]</code><br>
+      Requant: <code>u8 = clamp(round(real / out_scale), 0, 255)</code>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box u8" style="flex:2;">
+      <strong>Block Output</strong><br>
+      <span class="tag tag-u8">UINT8</span> [1, OC, OH, OW]<br>
+      + new scale (calibrated)<br>
+      <em>Becomes next block's input</em>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="flow no-break">
+  <div class="flow-arrow-down">&darr; After 8 blocks: [1, 512, 4, 4] uint8</div>
+  <div class="flow-row">
+    <div class="flow-box op">
+      <strong>Global AvgPool</strong><br>
+      Dequant u8&rarr;int32 sum &times; scale / spatial<br>
+      Output: <span class="tag tag-fp32">FP32</span> [512]
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box op">
+      <strong>FC Layer</strong><br>
+      <span class="tag tag-fp32">FP32</span> matmul [512 &rarr; 10]<br>
+      <span class="tag tag-simd">AVX2 FMA</span>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-box fp32">
+      <strong>Logits</strong> [10]<br>
+      argmax &rarr; prediction
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 class="page-break">2. Activation Sizes Through the Network</h2>
+
+<table class="no-break">
+<tr><th>Stage</th><th>Shape</th><th>Dtype</th><th>Size</th><th>Scale</th><th>Value Range</th><th>% Zeros</th></tr>
+<tr><td>Input</td><td>[1, 3, 32, 32]</td><td>float32</td><td>12 KB</td><td>&mdash;</td><td>[-2.18, 2.70]</td><td>&mdash;</td></tr>
+<tr><td>After conv1+ReLU</td><td>[1, 64, 32, 32]</td><td>float32</td><td>256 KB</td><td>&mdash;</td><td>[0, 1.15]</td><td>45%</td></tr>
+<tr style="background:#d1fae5;"><td>Quantized</td><td>[1, 64, 32, 32]</td><td><strong>uint8</strong></td><td><strong>64 KB</strong></td><td>0.0093</td><td>[0, 124]</td><td>59%</td></tr>
+<tr><td>layer1.0 out</td><td>[1, 64, 32, 32]</td><td>uint8</td><td>64 KB</td><td>0.0122</td><td>[0, 132]</td><td>30%</td></tr>
+<tr><td>layer1.1 out</td><td>[1, 64, 32, 32]</td><td>uint8</td><td>64 KB</td><td>0.0123</td><td>[0, 114]</td><td>32%</td></tr>
+<tr style="background:#fef3c7;"><td>layer2.0 out (stride 2)</td><td>[1, 128, 16, 16]</td><td>uint8</td><td>32 KB</td><td>0.0117</td><td>[0, 82]</td><td>56%</td></tr>
+<tr><td>layer2.1 out</td><td>[1, 128, 16, 16]</td><td>uint8</td><td>32 KB</td><td>0.0134</td><td>[0, 105]</td><td>39%</td></tr>
+<tr style="background:#fef3c7;"><td>layer3.0 out (stride 2)</td><td>[1, 256, 8, 8]</td><td>uint8</td><td>16 KB</td><td>0.0069</td><td>[0, 84]</td><td>72%</td></tr>
+<tr><td>layer3.1 out</td><td>[1, 256, 8, 8]</td><td>uint8</td><td>16 KB</td><td>0.0071</td><td>[0, 98]</td><td>43%</td></tr>
+<tr style="background:#fef3c7;"><td>layer4.0 out (stride 2)</td><td>[1, 512, 4, 4]</td><td>uint8</td><td>8 KB</td><td>0.0160</td><td>[0, 82]</td><td>70%</td></tr>
+<tr><td>layer4.1 out</td><td>[1, 512, 4, 4]</td><td>uint8</td><td>8 KB</td><td>0.0384</td><td>[0, 133]</td><td>76%</td></tr>
+<tr><td>Pooled</td><td>[512]</td><td>float32</td><td>2 KB</td><td>&mdash;</td><td>[0, 3.14]</td><td>&mdash;</td></tr>
+</table>
+<p><strong>Key observation:</strong> Activations are 4&times; smaller as uint8 vs float32. Sparsity increases in deeper layers (76% zeros in layer4.1) but we don't exploit it &mdash; dpbusd processes zeros at same speed.</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>3. Weight Storage & Packing</h2>
+
+<div class="cols-2 no-break">
+<div class="card">
+<h3>On Disk: 2-bit I2_S Packed (3.56 MB total)</h3>
+<pre>Per byte: 4 ternary weights, MSB first
+  +1 &rarr; 0b01
+   0 &rarr; 0b00
+  -1 &rarr; 0b11
+Per OC: alpha (float32) = mean(|w| where |w| > threshold)</pre>
+<p>12.5&times; compression vs FP32 (44.69 MB)</p>
+</div>
+<div class="card">
+<h3>In Memory: dpbusd-ready int32 packed</h3>
+<pre>At model load: unpack 2-bit &rarr; int8 {-1,0,+1}
+Then: pack4_i8(w[g*4+0..3]) &rarr; one int32
+  low byte  = w[g*4+0] as uint8
+  next byte = w[g*4+1] as uint8
+  ...
+Broadcast via _mm256_set1_epi32(packed_word)
+Layout: weights_packed[OC][num_k_groups]</pre>
+</div>
+</div>
+
+<table class="no-break" style="margin-top:6px;">
+<tr><th>Layer Group</th><th>OC&times;IC</th><th>Kernel</th><th>col_rows</th><th>Padded/Groups</th><th>Weight Size (packed)</th><th>+1 / 0 / -1 dist</th></tr>
+<tr><td>layer1 (4 convs)</td><td>64&times;64</td><td>3&times;3</td><td>576</td><td>576 / 144</td><td>36 KB/conv</td><td>~20% / 50% / 30%</td></tr>
+<tr><td>layer2 (4 convs)</td><td>128&times;64..128</td><td>3&times;3</td><td>576..1152</td><td>576..1152 / 144..288</td><td>72..144 KB</td><td>~25% / 45% / 30%</td></tr>
+<tr><td>layer3 (4 convs)</td><td>256&times;128..256</td><td>3&times;3</td><td>1152..2304</td><td>1152..2304 / 288..576</td><td>288..576 KB</td><td>~25% / 44% / 31%</td></tr>
+<tr><td>layer4 (4 convs)</td><td>512&times;256..512</td><td>3&times;3</td><td>2304..4608</td><td>2304..4608 / 576..1152</td><td>1152..2304 KB</td><td>~24% / 50% / 26%</td></tr>
+<tr><td>Shortcuts (3)</td><td>128..512 &times; 64..256</td><td>1&times;1</td><td>64..256</td><td>64..256 / 16..64</td><td>8..128 KB</td><td>FP32&rarr;INT8 quantized</td></tr>
+</table>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 class="page-break">4. The dpbusd Spatial-Packed Layout (Key Innovation)</h2>
+
+<div class="cols-2 no-break">
+<div class="card decision">
+<h3>Before: Reduction-Major (Exp 2, 17ms)</h3>
+<pre>For each (OC, spatial_pos):
+  acc = dpbusd(act[0:31], wt[0:31])  // 32 MACs
+  result = horizontal_reduce(acc)     // EXPENSIVE
+  // shuffle+hadd: saturated port 6 at 55%</pre>
+<p>Problem: dpbusd produces 8 partial sums in lanes. Need horizontal reduction to get one scalar. Shuffle instructions bottleneck port 6.</p>
+</div>
+<div class="card win">
+<h3>After: Spatial-Packed (Exp 7, 9ms &rarr; final)</h3>
+<pre>For each OC_group(16), spatial_group(8):
+  acc[16] = {0}   // 16 OC accumulators
+  for kg in reduction_groups:
+    a = load 32B  // 8 spatial &times; 4 reduction
+    for oc in 0..15:
+      w = broadcast weight_packed[oc][kg]
+      acc[oc] = dpbusd(acc[oc], a, w)
+  // NO horizontal reduction needed!
+  // Each lane = one spatial position's result</pre>
+<p>Each YMM lane accumulates a <em>different</em> spatial position. Results land directly in the correct lane. CPI: 0.294 &rarr; 0.179.</p>
+</div>
+</div>
+
+<div class="card no-break" style="margin-top:8px; border-color:#7c3aed;">
+<h3>dpbusd Instruction Detail</h3>
+<pre>_mm256_dpbusd_epi32(acc, activation, weight)
+  // For each of 8 groups of 4 bytes:
+  //   acc[i] += u8[i*4+0]*s8[0] + u8[i*4+1]*s8[1] + u8[i*4+2]*s8[2] + u8[i*4+3]*s8[3]
+  // activation: 32 bytes = 8 lanes &times; 4 reduction values (uint8, from col_packed)
+  // weight: 4 bytes broadcast to all lanes (int8, from weights_packed)
+  // acc: 8 &times; int32 partial sums (one per spatial position)
+  // Throughput: 1 instruction/cycle on Raptor Lake = 32 MACs/cycle</pre>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>5. Scale Arithmetic (Static Quantization)</h2>
+
+<div class="card no-break">
+<h3>The Scale Chain</h3>
+<pre>
+Real value reconstruction:
+  real_activation = uint8_value &times; act_scale          (per-tensor, from calibration)
+  real_weight     = int8_weight &times; alpha[oc]           (per-channel, from TWN training)
+  real_conv_out   = SUM(real_act &times; real_wt)           = SUM(u8 &times; i8) &times; act_scale &times; alpha[oc]
+                  = int32_acc &times; act_scale &times; alpha[oc]
+
+With fused BN:
+  bn_out = real_conv_out &times; bn_scale[oc] + bn_bias[oc]
+         = int32_acc &times; (act_scale &times; alpha[oc] &times; bn_scale[oc]) + bn_bias[oc]
+         = int32_acc &times; (act_scale &times; oc_scale[oc]) + oc_bias[oc]
+
+  where: oc_scale[oc] = alpha[oc] &times; bn_scale[oc]    &larr; precomputed at model load
+         oc_bias[oc]  = bn_bias[oc]                    &larr; precomputed at model load
+
+Requantize to uint8:
+  u8_out = clamp(round(relu(bn_out) / out_act_scale), 0, 255)
+
+  where: out_act_scale = calibrated scale for this layer's output activation range
+</pre>
+</div>
+
+<div class="cols-2 no-break" style="margin-top:6px;">
+<div class="card">
+<h3>What's precomputed (at model load)</h3>
+<ul>
+<li><code>oc_scale[oc]</code> = alpha &times; bn_scale (per OC)</li>
+<li><code>oc_bias[oc]</code> = bn_bias (per OC)</li>
+<li><code>weights_packed[oc][kg]</code> = 4 int8 per int32</li>
+<li>Shortcut weights: FP32 &rarr; INT8 symmetric quantization</li>
+</ul>
+</div>
+<div class="card">
+<h3>What happens at runtime (per inference)</h3>
+<ul>
+<li><code>dequant = act_scale &times; oc_scale[oc]</code> (1 multiply per OC)</li>
+<li><code>result = int32_acc &times; dequant + bias</code> (FMA per element)</li>
+<li>ReLU: <code>max(result, 0)</code></li>
+<li>Requant: <code>round(result / out_scale)</code>, clamp [0,255]</li>
+</ul>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 class="page-break">6. Crucial Design Decisions</h2>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 1: Treat ternary as generic INT8 (not special-cased)</h3>
+<p><strong>Alternatives tried:</strong> INT16 add/sub (17.5ms), sign_epi16 (17.5ms), sparse pos/neg lists (17.9ms), FP32 add/sub (81ms), 4-bit sign+add (32.9ms)</p>
+<p><strong>Why INT8 wins:</strong> dpbusd does 32 MACs/instruction with 1-cycle throughput regardless of weight values. The hardware multiplier runs at the same speed for {-1,0,+1} as for any int8. "Skipping" the multiply with add/sub actually <em>reduces</em> throughput (8 ops/instr for add_epi32 vs 32 for dpbusd). The multiplier is free.</p>
+<p><strong>Impact:</strong> 7&times; faster than the best ternary-specific approach. This single decision defines the entire engine architecture.</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 2: Spatial-packed layout (8 spatial &times; 4 reduction per dpbusd)</h3>
+<p><strong>Alternative:</strong> Reduction-major layout (32 reduction values per dpbusd, horizontal reduce after).</p>
+<p><strong>Why spatial-packed wins:</strong> Horizontal reduction (shuffle+hadd) saturated port 6 at 55%. By placing different spatial positions in different lanes, results land directly in the correct lane. Zero horizontal reductions needed.</p>
+<p><strong>Impact:</strong> CPI 0.294 &rarr; 0.179. Retiring 54% &rarr; 82%. The single biggest microarchitectural win (1.75&times; GEMM speedup).</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 3: INT8-resident execution (activations stay uint8 between ALL layers)</h3>
+<p><strong>Alternative:</strong> Dynamic quantization per layer (FP32 between layers, quantize on entry to each conv).</p>
+<p><strong>Why static INT8 wins:</strong> Dynamic quantization requires: (a) finding max value (reduction over entire tensor), (b) dividing by max, (c) converting to uint8. For layer1 (64&times;32&times;32), that's ~200K FP32 operations just for quantization. Static calibration moves this cost offline.</p>
+<p><strong>Impact:</strong> Eliminated 24.5% FP32 im2col overhead + 9.7% findmax overhead. im2col operates on bytes (4&times; less data).</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 4: Two-pass im2col + repack (NOT fused)</h3>
+<p><strong>Alternatives tried:</strong> (a) Fused implicit GEMM &mdash; gather bytes inside GEMM loop (Exp 14: 58ms). (b) Fused im2col&rarr;col_packed &mdash; skip col_u8 (4.71ms vs 4.48ms). (c) Unrolled 9-position im2col with inline AVX2 copies (4.58ms vs 4.48ms).</p>
+<p><strong>Why two-pass wins:</strong> Sequential bulk memory operations (memcpy for im2col, SSE shuffle for repack) are extremely efficient on modern CPUs. Fused approaches add per-element address computation that destroys the sequential access pattern. The icache/DSB also penalizes code bloat from inlining.</p>
+<p><strong>Impact:</strong> 21% of runtime. This is the gap to ONNX INT8 Static (which uses JIT-generated fused implicit GEMM with prefetch hints).</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 5: Fused epilogues (residual add + ReLU + requant in GEMM output loop)</h3>
+<p><strong>Alternative:</strong> Separate passes for dequant, residual add, ReLU, and requant.</p>
+<p><strong>Why fused wins:</strong> The int32 accumulator is already in a YMM register. Dequant (cvtepi32+fmadd), residual add, ReLU (maxps), and requant (cvtps+packus) all happen while data is in registers. Zero intermediate tensors written to memory.</p>
+<p><strong>Impact:</strong> Eliminated 3 separate passes over the output tensor. Especially important for mode 2 (conv2 + residual) where unfused would require a temporary FP32 tensor.</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 6: 16-OC tiling (not 8, not 32)</h3>
+<p><strong>Why 16:</strong> Raptor Lake has 16 YMM (256-bit) registers. With 16 OC accumulators, each uses 1 register. The activation load (1 register) is reused across all 16 OCs. Going to 32 OC would require spilling to stack; 8 OC wastes half the register file.</p>
+<p><strong>Impact:</strong> Each 32B activation load is amortized across 16 OC channels. Activation bandwidth reduced 16&times; compared to no tiling.</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 7: Shortcut convs via dpbusd (not FP32 GEMM)</h3>
+<p><strong>Alternative:</strong> Keep shortcut 1&times;1 convs as FP32 (they have FP32 weights from training).</p>
+<p><strong>Why INT8 wins:</strong> Quantize FP32 weights to INT8 at model load (per-channel symmetric). Route through the same spatial-packed dpbusd path. This eliminated all FP32 GEMM except the first conv.</p>
+<p><strong>Impact:</strong> Engine::forward overhead dropped from 20.8% &rarr; 3.0%. dpbusd processes 4&times; more values per instruction than FP32 FMA.</p>
+</div>
+</div>
+
+<div class="no-break">
+<div class="card decision" style="margin-bottom:8px;">
+<h3>Decision 8: Preallocated buffers + DefaultInitAlloc (zero malloc on hot path)</h3>
+<p><strong>Problem:</strong> Original code created new Tensor/TensorU8 (via std::vector) in every conv call. That's ~19 malloc+free per inference + zero-initialization of every output buffer.</p>
+<p><strong>Fix:</strong> (a) Preallocate 3 uint8 + 2 float32 activation buffers at max size. Ping-pong between them. <code>reshape()</code> reuses memory if capacity suffices. (b) <code>DefaultInitAlloc</code> skips zero-fill since GEMM epilogue writes every element.</p>
+<p><strong>Impact:</strong> malloc disappeared from perf profile. memset dropped from 1.4% to &lt;0.3%.</p>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2 class="page-break">7. VTune Profile (Final Engine, 1-Thread)</h2>
+
+<table class="no-break">
+<tr><th>Function</th><th>Time %</th><th>CPI</th><th>Retiring %</th><th>FE Bound %</th><th>BE Bound %</th><th>Mem Bound %</th><th>Key Bottleneck</th></tr>
+<tr style="background:#ecfdf5;"><td><strong>dpbusd GEMM (constprop.0)</strong></td><td>43.4%</td><td>0.179</td><td>82.2%</td><td>1.3%</td><td>16.7%</td><td>5.8%</td><td>Core bound 11% (register pressure)</td></tr>
+<tr style="background:#ecfdf5;"><td><strong>dpbusd GEMM (constprop.2)</strong></td><td>34.6%</td><td>0.178</td><td>84.6%</td><td>2.3%</td><td>13.0%</td><td>6.9%</td><td>Core bound 6%</td></tr>
+<tr style="background:#fef3c7;"><td>im2col_u8</td><td>10.4%</td><td>0.230</td><td>62.1%</td><td><strong>36.3%</strong></td><td>1.7%</td><td>0.4%</td><td>Front-end bound (DSB misses)</td></tr>
+<tr><td>memcpy (im2col rows)</td><td>5.0%</td><td>0.312</td><td>39.2%</td><td><strong>40.5%</strong></td><td>20.6%</td><td>27.6%</td><td>FE bound + store bound</td></tr>
+<tr><td>Engine::forward (conv1 FP32)</td><td>4.2%</td><td>0.366</td><td>44.3%</td><td>8.3%</td><td>43.2%</td><td>50.9%</td><td>Memory bound (FP32 data)</td></tr>
+<tr><td>GEMM shortcut (constprop.1)</td><td>1.3%</td><td>0.186</td><td>83.9%</td><td>4.8%</td><td>18.4%</td><td>9.2%</td><td>Small layers, good throughput</td></tr>
+</table>
+
+<div class="cols-2 no-break" style="margin-top:8px;">
+<div class="card win">
+<h3>What's optimal (78% of time)</h3>
+<p>GEMM at CPI=0.179, 82-84% retiring, 89% cycles with 3+ ports utilized. Near-theoretical peak. 256-bit INT ops = 23% of retired instructions.</p>
+</div>
+<div class="card decision">
+<h3>What's left to optimize (22% of time)</h3>
+<p>im2col + memcpy: 15% &mdash; front-end bound from branch-heavy memcpy dispatch for small rows. Every fusion attempt we tried was slower (sequential bulk ops win).</p>
+<p>Conv1 FP32: 4% &mdash; could be moved to INT8 path by quantizing the FP32 input.</p>
+</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>8. Cache Behavior (perf stat, per inference)</h2>
+
+<table class="no-break">
+<tr><th>Metric</th><th>Value</th><th>Interpretation</th></tr>
+<tr><td>L1 loads</td><td>8.9M</td><td>&mdash;</td></tr>
+<tr style="background:#ecfdf5;"><td>L1 miss rate</td><td><strong>0.97%</strong></td><td>99% served from L1 (48 KB)</td></tr>
+<tr><td>L2 demand reads</td><td>86.6K</td><td>Only 1% of L1 loads reach L2</td></tr>
+<tr style="background:#ecfdf5;"><td>L2 miss rate</td><td><strong>1.80%</strong></td><td>Almost nothing escapes L2 (1.25 MB)</td></tr>
+<tr><td>LLC misses / inference</td><td>1,059</td><td>~68 KB DRAM traffic per inference</td></tr>
+<tr><td>Overall Memory Bound</td><td>5.4%</td><td>Not a bottleneck at CIFAR-10 scale</td></tr>
+<tr><td>DRAM BW utilized</td><td>2.0 / 37 GB/s</td><td>5.4% of max &mdash; compute bound, not BW bound</td></tr>
+</table>
+
+<p style="margin-top:6px;"><strong>Why so cache-friendly:</strong> CIFAR-10 activations are tiny (8-64 KB). Even the largest im2col buffer (576 KB for layer1) fits in L2. 16-OC tiling keeps the active weight slice (9-72 KB) in L1. INT8 = 4&times; less data vs FP32.</p>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<h2>9. Final Numbers</h2>
+
+<table class="no-break">
+<tr><th>Method</th><th>1-Thread</th><th>6-Thread</th><th>Accuracy</th><th>Model Size</th></tr>
+<tr><td>PyTorch FP32</td><td>11.18 ms</td><td>6.50 ms</td><td>95.54%</td><td>44.69 MB</td></tr>
+<tr><td>ONNX FP32</td><td>9.75 ms</td><td>2.49 ms</td><td>95.54%</td><td>44.69 MB</td></tr>
+<tr><td>ONNX INT8 Dynamic</td><td>4.26 ms</td><td>2.74 ms</td><td>95.48%</td><td>11.23 MB</td></tr>
+<tr><td>ONNX INT8 Static</td><td>2.56 ms</td><td>1.08 ms</td><td>95.43%</td><td>11.23 MB</td></tr>
+<tr style="background:#ecfdf5; font-weight:700;"><td>C++ Ternary Engine</td><td>4.48 ms</td><td>2.11 ms</td><td>94.46%</td><td>3.56 MB</td></tr>
+</table>
+
+<div class="cols-3 no-break" style="margin-top:8px;">
+<div class="card win" style="text-align:center;">
+<div style="font-size:28px; font-weight:800; color:#059669;">38&times;</div>
+<div style="font-size:10px; color:#666;">vs naive C++ baseline</div>
+</div>
+<div class="card win" style="text-align:center;">
+<div style="font-size:28px; font-weight:800; color:#059669;">1.3&times;</div>
+<div style="font-size:10px; color:#666;">faster than ONNX INT8 Dynamic (6T)</div>
+</div>
+<div class="card" style="text-align:center; border-color:#2563eb;">
+<div style="font-size:28px; font-weight:800; color:#2563eb;">3.2&times;</div>
+<div style="font-size:10px; color:#666;">smaller than ONNX INT8</div>
+</div>
+</div>
+
+<p style="margin-top:12px; font-size:10px; color:#64748b; text-align:center;">
+Generated from VTune uarch-exploration, perf stat, and debug walkthrough data. All numbers measured on Intel i5-13400F, Linux 6.8, GCC -O3 -march=native.
+</p>
+
+</body>
+</html>

@@ -1,0 +1,3 @@
+from models.resnet_fp import resnet18_cifar
+from models.resnet_ternary import ternary_resnet18_cifar, TernaryResNet18CIFAR
+from models.ternary_conv import TernaryConv2d

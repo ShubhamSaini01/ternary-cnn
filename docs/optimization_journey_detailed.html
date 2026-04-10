@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Optimization Journey — Detailed Talking Points with VTune Evidence</title>
+<style>
+@page { size: A4; margin: 15mm; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #fff; color: #1a1a2e; font-size: 11px; line-height: 1.5; padding: 20px; max-width: 210mm; margin: 0 auto; }
+h1 { font-size: 22px; color: #0f172a; margin-bottom: 4px; border-bottom: 3px solid #2563eb; padding-bottom: 6px; }
+h2 { font-size: 16px; color: #1e40af; margin: 20px 0 8px 0; border-left: 4px solid #2563eb; padding-left: 8px; page-break-after: avoid; }
+h3 { font-size: 13px; color: #334155; margin: 10px 0 4px 0; }
+p, li { font-size: 11px; margin: 2px 0; }
+ul { margin: 4px 0 4px 16px; }
+.subtitle { font-size: 12px; color: #64748b; margin-bottom: 16px; }
+table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 10px; }
+th { background: #f1f5f9; padding: 4px 6px; text-align: left; font-weight: 600; border: 1px solid #e2e8f0; }
+td { padding: 3px 6px; border: 1px solid #e2e8f0; }
+tr.highlight td { background: #ecfdf5; font-weight: 600; }
+tr.failed td { background: #fef2f2; }
+.tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 700; margin-right: 3px; }
+.tag-vtune { background: #ede9fe; color: #5b21b6; }
+.tag-journal { background: #fef3c7; color: #92400e; }
+.tag-bench { background: #d1fae5; color: #065f46; }
+.tag-perf { background: #e0e7ff; color: #3730a3; }
+.evidence { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.talking-point { background: #eff6ff; border-left: 3px solid #2563eb; padding: 6px 10px; margin: 8px 0; font-style: italic; }
+.section-break { border-top: 2px solid #ef4444; margin: 20px 0 10px 0; padding-top: 8px; }
+.cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.win { background: #ecfdf5; border: 1px solid #059669; border-radius: 6px; padding: 6px 8px; }
+.fail { background: #fef2f2; border: 1px solid #ef4444; border-radius: 6px; padding: 6px 8px; }
+code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+.dim { color: #94a3b8; font-size: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Optimization Journey: Talking Points with Evidence</h1>
+<p class="subtitle">Ternary ResNet-18, CIFAR-10, Intel i5-13400F (Raptor Lake, AVX2 + AVX-VNNI) &mdash; 79ms &rarr; 1.00ms (79&times;)</p>
+
+<p><strong>Evidence tags:</strong>
+<span class="tag tag-vtune">VTUNE</span> VTune uarch-exploration (collected April 2026, results in <code>/tmp/vtune_*</code>)
+<span class="tag tag-journal">JOURNAL</span> From <code>docs/optimization_journal.md</code> (original development)
+<span class="tag tag-bench">BENCH</span> Engine benchmark (median, 200-500 runs)
+<span class="tag tag-perf">PERF</span> Linux perf record + objdump
+</p>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 1: Naive FP32 AVX2 Baseline &rarr; 79ms (1T)</h2>
+
+<p><strong>What</strong>: FP32 im2col + GEMM with AVX2 FMA. BN fused into conv weights at export.</p>
+<div class="evidence"><span class="tag tag-journal">JOURNAL</span> 79.26ms 1T. 31&times; slower than ONNX INT8 Static.</div>
+<div class="talking-point">Starting from scratch &mdash; no INT8, no VNNI. This is our measure-first baseline.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 2: Transposed dpbusd VNNI &rarr; 17ms (1T)</h2>
+
+<p><strong>What</strong>: Dynamic INT8 quantize &rarr; transpose &rarr; dpbusd per (OC, spatial_pos) with horizontal reduction.</p>
+<div class="evidence">
+<span class="tag tag-journal">JOURNAL</span> Latency: 79ms &rarr; 17ms (4.7&times;)<br>
+<span class="tag tag-journal">JOURNAL</span> VTune: CPI=0.294, Port 6 at 54.6% &mdash; horizontal reduction shuffles saturating a single execution port.
+</div>
+<div class="talking-point">First VNNI usage. Huge win from INT8, but VTune shows Port 6 saturated &mdash; the bottleneck is horizontal reduction shuffles, not dpbusd throughput.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Steps 3&ndash;6: Failed Ternary-Specific Approaches</h2>
+
+<table>
+<tr><th>Attempt</th><th>Result</th><th>Why Failed</th><th>Source</th></tr>
+<tr class="failed"><td>INT16 add/sub</td><td>17.5ms</td><td>Half throughput of dpbusd (16 vs 32 ops/insn)</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr class="failed"><td>sign_epi16</td><td>17.9ms</td><td>Same Port 6 saturation as dpbusd</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr class="failed"><td>FP32 add/sub</td><td>81ms</td><td>8 ops/insn vs 32 for INT8 dpbusd</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr class="failed"><td>8-OC INT16 tiling</td><td>68ms</td><td>L1 thrashing &mdash; accumulators exceed L1</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr class="failed"><td>Sparse zero-skip</td><td>50ms</td><td>Branch misprediction &gt; savings (14% sparsity)</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+</table>
+<div class="talking-point">Every ternary-specific trick lost to dpbusd. The hardware multiplier is "free" &mdash; ternary's trivial multiply doesn't help when multiply isn't the bottleneck.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 7: Spatial-Packed dpbusd &mdash; BREAKTHROUGH &rarr; 9.7ms (1T)</h2>
+
+<p><strong>What</strong>: Restructured dpbusd: 8 spatial positions &times; 4 reduction elements per instruction. Weight broadcast to all lanes. No horizontal reduction.</p>
+<div class="evidence">
+<span class="tag tag-journal">JOURNAL</span> Latency: 17ms &rarr; 9.7ms (1.75&times;)<br>
+<span class="tag tag-journal">JOURNAL</span> VTune: CPI 0.294 &rarr; 0.208, Retiring 54% &rarr; 72%, Port 6 pressure reduced, Split Loads 6% &rarr; 1%.
+</div>
+<div class="talking-point">The single biggest architectural insight. Eliminating horizontal reduction unlocked 1.75&times; &mdash; VTune Port 6 saturation was the direct evidence.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Steps 8&ndash;11: Systematic Overhead Removal &rarr; 6.9ms (1T)</h2>
+
+<table>
+<tr><th>Step</th><th>Change</th><th>Latency</th><th>Evidence</th></tr>
+<tr><td>8</td><td>Vectorized quantize + repack (AVX2 packus)</td><td>9.0ms</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr><td>9</td><td>Preallocated workspace (eliminate 4000 malloc/free)</td><td>7.3ms</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr><td>10</td><td>INT8-resident static quantization</td><td>7.2ms</td><td><span class="tag tag-journal">JOURNAL</span> Eliminated 24.5% FP32 im2col + 9.7% findmax</td></tr>
+<tr><td>11</td><td>Fused residual add+ReLU+requant in GEMM epilogue</td><td>6.9ms</td><td><span class="tag tag-journal">JOURNAL</span> Zero intermediate FP32 tensors</td></tr>
+</table>
+<div class="talking-point">Not glamorous but each step measured before/after. No speculative changes.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 12: 3&times;3 Stride-1 Specialized im2col &rarr; 5.4ms (1T)</h2>
+
+<p><strong>What</strong>: Replace per-element bounds-check im2col with memcpy-per-row for 3&times;3 stride-1 pad-1 (12 of 16 ternary convs).</p>
+<div class="evidence">
+<span class="tag tag-journal">JOURNAL</span> Latency: 6.9ms &rarr; 5.4ms. im2col dropped from 30% &rarr; 7.4%.
+</div>
+<div class="talking-point">Biggest single win on data-prep. <code>memcpy</code> uses <code>rep movsb</code> &mdash; 1 instruction per row vs N element-wise branches.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Steps 13&ndash;17: INT8 Shortcuts + SIMD Repack &rarr; 2.11ms (6T)</h2>
+
+<table>
+<tr><th>Step</th><th>Change</th><th>1T</th><th>6T</th><th>Evidence</th></tr>
+<tr><td>13</td><td>Fused conv1 epilogue</td><td>5.6ms</td><td>3.3ms</td><td><span class="tag tag-journal">JOURNAL</span></td></tr>
+<tr><td>15</td><td>INT8 shortcut convs via dpbusd</td><td>4.9ms</td><td>2.7ms</td><td><span class="tag tag-journal">JOURNAL</span> forward overhead 20.8% &rarr; 3.0%</td></tr>
+<tr><td>17</td><td>SSE-vectorized repack (unpacklo interleave)</td><td>4.5ms</td><td>2.15ms</td><td><span class="tag tag-journal">JOURNAL</span> Repack 22.8% &rarr; ~16%</td></tr>
+<tr><td>&mdash;</td><td>No-init allocator (DefaultInitAlloc)</td><td>4.5ms</td><td>2.11ms</td><td><span class="tag tag-journal">JOURNAL</span> VTune: memset 1.4% &rarr; &lt;0.3%</td></tr>
+</table>
+<div class="talking-point">INT8 shortcuts eliminated all FP32 GEMM except first conv. SSE repack halved the interleave cost.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Steps 18&ndash;19: Failed 4-Bit Experiments</h2>
+
+<table>
+<tr><th>Attempt</th><th>Latency</th><th>Accuracy</th><th>Why Failed</th></tr>
+<tr class="failed"><td>4-bit sign+add GEMM</td><td>32.91ms</td><td>93.56%</td><td><span class="tag tag-journal">JOURNAL</span> 8.2&times; more instructions (VTune: 165.8B vs 20.3B)</td></tr>
+<tr class="failed"><td>4-bit nibble-packed dpbusd</td><td>8.24ms</td><td>93.64%</td><td><span class="tag tag-journal">JOURNAL</span> Unpack overhead: 27.9B vs 2.7B instructions</td></tr>
+</table>
+<div class="talking-point">"Fewer bits" doesn't mean faster when data fits in L1. dpbusd's 32 MACs/instruction is unbeatable on VNNI.</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<div class="section-break"></div>
+<h2 style="color:#dc2626;">Steps 20&ndash;22: New Optimizations (VTune evidence from this session)</h2>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 20: MLAS Disassembly + 14-OC Unrolled GEMM &rarr; 1.89ms (6T)</h2>
+
+<h3>Hypothesis</h3>
+<p>ONNX Runtime uses MLAS (not oneDNN) for INT8 on AVX-VNNI. VTune shows GEMM L1 Latency Dependency = 68% &mdash; the load-dpbusd-store chain on stack accumulators. Unrolling dpbusd with register-only accumulators should eliminate this.</p>
+
+<h3>What we did</h3>
+<ol style="margin:4px 0 4px 16px;">
+<li><span class="tag tag-perf">PERF</span> Disassembled MLAS kernel via <code>perf record</code> + <code>objdump</code> &mdash; confirmed 6-OC &times; 16-N with 12 YMM register accumulators, <code>vpdpbusds</code></li>
+<li>Discovered oneDNN has NO JIT INT8 for AVX-VNNI &mdash; <code>DNNL_VERBOSE=1</code> showed <code>ref_int8:any</code> (7,400&times; slower than hand-written VNNI)</li>
+<li><span class="tag tag-bench">BENCH</span> Swept OC tile sizes 6/8/10/12/14/16 with fully unrolled dpbusd</li>
+<li>14-OC selected as sweet spot: good register pressure + activation reuse</li>
+</ol>
+
+<h3>VTune evidence</h3>
+<div class="evidence">
+<span class="tag tag-vtune">VTUNE</span> <code>/tmp/vtune_ternary_1t</code> vs <code>/tmp/vtune_14oc_1t</code>
+<table>
+<tr><th>Metric</th><th>16-OC baseline</th><th>14-OC unrolled</th><th>Source</th></tr>
+<tr class="highlight"><td>6T median</td><td>2.11ms</td><td>1.89ms</td><td><span class="tag tag-bench">BENCH</span> 500 runs</td></tr>
+<tr class="highlight"><td>1T median</td><td>4.72ms</td><td>3.89ms</td><td><span class="tag tag-bench">BENCH</span> 500 runs</td></tr>
+<tr><td>CPI (whole inference)</td><td>0.197</td><td>0.246</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>Retiring</td><td>74.9%</td><td>61.5%</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>L1 Latency Dep (overall)</td><td>57.6%</td><td>57.7%</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>GEMM CPU time (1T, 200 runs)</td><td>0.52s + 0.42s = 0.95s</td><td>0.25s + 0.21s = 0.46s</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>GEMM CPI (per-function)</td><td>0.174</td><td>0.223</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>GEMM L1 Dep (per-function)</td><td>68.6%</td><td>70.5%</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+</table>
+</div>
+
+<h3>Tile size sweep</h3>
+<div class="evidence">
+<span class="tag tag-bench">BENCH</span> 200 runs each, median
+<table>
+<tr><th>OC Tile</th><th>1T</th><th>6T</th></tr>
+<tr><td>6</td><td>5.23ms</td><td>2.10ms</td></tr>
+<tr><td>8</td><td>4.54ms</td><td>2.03ms</td></tr>
+<tr><td>10</td><td>3.98ms</td><td>2.01ms</td></tr>
+<tr><td>12</td><td>3.85ms</td><td>2.00ms</td></tr>
+<tr class="highlight"><td><strong>14</strong></td><td><strong>3.89ms</strong></td><td><strong>1.89ms</strong></td></tr>
+<tr><td>16 (unrolled)</td><td>4.44ms</td><td>2.07ms</td></tr>
+<tr><td>16 (original loop)</td><td>4.72ms</td><td>2.11ms</td></tr>
+</table>
+</div>
+
+<p><strong>Why it worked despite worse CPI</strong>: GEMM wall time halved (0.95s &rarr; 0.46s). 14 unrolled dpbusd per kg iteration executes more useful VNNI work. CPI worsened because im2col/repack (still serial, higher CPI) became a larger fraction.</p>
+<p><strong>Why L1 Dep didn't improve</strong>: 14 acc + 1 act + 1 weight = 16 YMM &mdash; exactly the limit. Compiler spills 2-3, but straight-line code hides latency better than the loop.</p>
+<p><span class="tag tag-bench">BENCH</span> <strong>Accuracy</strong>: 94.46% (9446/10000) &mdash; unchanged.</p>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 21: Parallel im2col + Repack &rarr; 1.14ms (6T)</h2>
+
+<h3>Hypothesis</h3>
+<p>Engine profile at 6T: im2col+repack = 1.11ms (56% of total) running in <code>omp single</code>. GEMM only 0.66ms. Parallelizing im2col across K-rows and repack across kg groups should scale to 6 threads.</p>
+
+<h3>What we did</h3>
+<p>Replaced <code>#pragma omp single { im2col; repack; }</code> with:</p>
+<ol style="margin:4px 0 4px 16px;">
+<li><code>omp for schedule(static)</code> over K-rows for im2col &mdash; each row writes to independent output region</li>
+<li><code>omp barrier</code> &mdash; ensure im2col done before repack</li>
+<li><code>omp for schedule(static)</code> over kg groups for repack &mdash; each group reads 4 rows, writes unique destination</li>
+</ol>
+
+<h3>Evidence</h3>
+<div class="evidence">
+<span class="tag tag-vtune">VTUNE</span> <code>/tmp/vtune_parallel_1t</code> &amp; <code>/tmp/vtune_parallel_6t</code><br>
+<span class="tag tag-bench">BENCH</span> Engine profile
+<table>
+<tr><th>Metric</th><th>Serial im2col</th><th>Parallel im2col</th><th>Source</th></tr>
+<tr class="highlight"><td>6T median</td><td>1.89ms</td><td>1.14ms</td><td><span class="tag tag-bench">BENCH</span></td></tr>
+<tr><td>1T median</td><td>3.89ms</td><td>3.97ms</td><td><span class="tag tag-bench">BENCH</span> (expected ~same)</td></tr>
+<tr><td>im2col+repack (6T)</td><td>1.11ms (56%)</td><td>0.31ms (24%)</td><td>Engine profile</td></tr>
+<tr><td>GEMM+epilogue (6T)</td><td>0.66ms (33%)</td><td>0.76ms (60%)</td><td>Engine profile</td></tr>
+<tr><td>CPI (1T)</td><td>0.246</td><td>0.248</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+<tr><td>L1 Latency Dep (1T)</td><td>57.7%</td><td>48.9%</td><td><span class="tag tag-vtune">VTUNE</span></td></tr>
+</table>
+</div>
+<p><span class="tag tag-vtune">VTUNE</span> <strong>6T observation</strong>: libgomp barriers now 23% of CPU time (CPI=22.5 &mdash; pure spin-wait). Cost: 3 barriers/layer &times; 19 layers = ~57 synchronizations per inference.</p>
+<p><span class="tag tag-bench">BENCH</span> <strong>Accuracy</strong>: 94.46% &mdash; unchanged.</p>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Step 22: Parallel Conv1 FP32 &rarr; 1.00ms (6T)</h2>
+
+<h3>Hypothesis</h3>
+<p>Engine profile: Conv1 FP32+ReLU+quantize = 0.21ms at 6T (17%), running in <code>omp single</code>. 64 output channels are independent.</p>
+
+<h3>What we did</h3>
+<p>Replaced <code>omp single { conv2d_fp32(); relu(); quantize(); }</code> with:</p>
+<ol style="margin:4px 0 4px 16px;">
+<li><code>omp single</code> for FP32 im2col (shared data, small)</li>
+<li><code>omp for schedule(static)</code> over 64 OCs: fused GEMM + bias + ReLU + quantize-to-u8 in one pass</li>
+</ol>
+
+<h3>Evidence</h3>
+<div class="evidence">
+<span class="tag tag-vtune">VTUNE</span> <code>/tmp/vtune_final_1t</code> &amp; <code>/tmp/vtune_final_6t</code>
+<table>
+<tr><th>Metric</th><th>Before</th><th>After</th><th>Source</th></tr>
+<tr class="highlight"><td>6T median</td><td>1.14ms</td><td>1.00ms</td><td><span class="tag tag-bench">BENCH</span> 500 runs</td></tr>
+<tr><td>1T median</td><td>3.97ms</td><td>3.96ms</td><td><span class="tag tag-bench">BENCH</span></td></tr>
+<tr><td>Conv1 time (6T)</td><td>0.21ms (17%)</td><td>0.052ms (5%)</td><td>Engine profile</td></tr>
+</table>
+</div>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2 style="color:#059669;">Final State: VTune-Verified Profile</h2>
+
+<div class="cols-2">
+<div>
+<h3>1T &mdash; <span class="tag tag-vtune">VTUNE</span> <code>vtune_final_1t</code></h3>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>CPI (whole inference)</td><td>0.248</td></tr>
+<tr><td>Retiring</td><td>71.4%</td></tr>
+<tr><td>Front-End Bound</td><td>12.4%</td></tr>
+<tr><td>Back-End Bound</td><td>23.2%</td></tr>
+<tr><td>Memory Bound</td><td>7.1%</td></tr>
+<tr><td>L1 Latency Dep</td><td>48.9%</td></tr>
+<tr><td>Core Bound</td><td>16.1%</td></tr>
+<tr><td>256-bit VNNI uOps</td><td>25.8%</td></tr>
+</table>
+</div>
+<div>
+<h3>6T &mdash; <span class="tag tag-vtune">VTUNE</span> <code>vtune_final_6t</code></h3>
+<table>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>CPI (whole inference)</td><td>0.440</td></tr>
+<tr><td>Retiring</td><td>53.4%</td></tr>
+<tr><td>Back-End Bound</td><td>59.7%</td></tr>
+<tr><td>Memory Bound</td><td>22.0%</td></tr>
+<tr><td>L1 Latency Dep</td><td>35.3%</td></tr>
+<tr><td>Core Bound</td><td>37.7%</td></tr>
+</table>
+</div>
+</div>
+
+<h3>Per-Function at 6T</h3>
+<div class="evidence">
+<span class="tag tag-vtune">VTUNE</span> <code>vtune_final_6t</code>
+<table>
+<tr><th>Function</th><th>CPU Time</th><th>CPI</th><th>L1 Dep</th><th>What</th></tr>
+<tr><td>conv2d_ternary constprop.0</td><td>0.571s (33%)</td><td>0.292</td><td>35.5%</td><td>GEMM mode 0/1</td></tr>
+<tr><td>conv2d_ternary constprop.2</td><td>0.468s (27%)</td><td>0.284</td><td>66.4%</td><td>GEMM mode 2 (+ residual)</td></tr>
+<tr><td>libgomp func@0x20760</td><td>0.395s (23%)</td><td>22.5</td><td>0%</td><td>OMP barrier spin-wait</td></tr>
+<tr><td>memcpy</td><td>0.056s (3%)</td><td>0.359</td><td>25.9%</td><td>im2col memcpy-per-row</td></tr>
+<tr><td>Engine::forward</td><td>0.035s (2%)</td><td>0.339</td><td>31.0%</td><td>Conv1 + overhead</td></tr>
+</table>
+</div>
+
+<h3>Engine Profile at 6T (per-inference)</h3>
+<div class="evidence">
+<span class="tag tag-bench">BENCH</span> 500 runs
+<table>
+<tr><th>Component</th><th>Time</th><th>%</th></tr>
+<tr><td>Conv1 FP32+ReLU+quant</td><td>0.052ms</td><td>5%</td></tr>
+<tr><td>Ternary im2col+repack</td><td>0.310ms</td><td>29%</td></tr>
+<tr><td>Ternary GEMM+epilogue</td><td>0.689ms</td><td>65%</td></tr>
+<tr><td>Pool+FC</td><td>0.002ms</td><td>0.2%</td></tr>
+<tr class="highlight"><td><strong>Total</strong></td><td><strong>1.05ms</strong></td><td></td></tr>
+</table>
+</div>
+
+<h3>Thread Scaling</h3>
+<div class="evidence">
+<span class="tag tag-bench">BENCH</span> 500 runs each
+<table>
+<tr><th>Threads</th><th>Median</th><th>Speedup</th><th>Efficiency</th></tr>
+<tr><td>1T</td><td>3.96ms</td><td>1.0&times;</td><td>&mdash;</td></tr>
+<tr><td>2T</td><td>2.03ms</td><td>2.0&times;</td><td>98%</td></tr>
+<tr><td>4T</td><td>1.34ms</td><td>3.0&times;</td><td>74%</td></tr>
+<tr class="highlight"><td>6T</td><td>1.00ms</td><td>4.0&times;</td><td>66%</td></tr>
+<tr><td>8T</td><td>1.55ms</td><td>2.6&times;</td><td>regression</td></tr>
+</table>
+</div>
+
+<p><span class="tag tag-bench">BENCH</span> <strong>Accuracy</strong>: 94.46% (9446/10000) &mdash; full CIFAR-10 test set.</p>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Final Comparison</h2>
+
+<table>
+<tr><th>Engine</th><th>1T</th><th>6T</th><th>Accuracy</th><th>Model Size</th></tr>
+<tr><td>PyTorch FP32</td><td>11.18ms</td><td>6.50ms</td><td>95.54%</td><td>44.69 MB</td></tr>
+<tr><td>ONNX FP32</td><td>9.75ms</td><td>2.49ms</td><td>95.54%</td><td>44.69 MB</td></tr>
+<tr><td>ONNX INT8 Dynamic</td><td>4.26ms</td><td>2.74ms</td><td>95.48%</td><td>11.23 MB</td></tr>
+<tr><td>ONNX INT8 Static</td><td>2.56ms</td><td>1.08ms</td><td>95.43%</td><td>11.23 MB</td></tr>
+<tr class="highlight"><td><strong>C++ Ternary Engine</strong></td><td><strong>3.96ms</strong></td><td><strong>1.00ms</strong></td><td><strong>94.46%</strong></td><td><strong>3.56 MB</strong></td></tr>
+</table>
+
+<!-- ════════════════════════════════════════════════════ -->
+<h2>Remaining Bottlenecks</h2>
+<div class="evidence">
+<span class="tag tag-vtune">VTUNE</span> <code>vtune_final_6t</code>
+<ol style="margin:4px 0 4px 16px;">
+<li><strong>OMP barriers (23%)</strong>: libgomp spin-wait. ~57 barriers per inference. Fusing im2col+repack into 1 <code>omp for</code> could save ~0.1ms.</li>
+<li><strong>GEMM L1 Dep (35&ndash;66%)</strong>: 14-OC partially spills registers. Layout change for 2-jg tiling could help (~0.05ms).</li>
+<li><strong>Memory Bound (22%)</strong>: 6 threads competing for L2/L3 during parallel im2col.</li>
+</ol>
+<p>Estimated headroom: ~0.1&ndash;0.15ms. Theoretical floor: ~0.85ms at 6T.</p>
+</div>
+
+<div style="margin-top:20px; text-align:center; color:#64748b; font-size:10px; border-top:1px solid #e2e8f0; padding-top:8px;">
+Ternary CNN Inference Engine &mdash; Optimization Journey &mdash; Shubham Saini &mdash; April 2026
+</div>
+
+</body>
+</html>

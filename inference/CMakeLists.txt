@@ -4,7 +4,8 @@ project(ternary_inference CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Enable AVX2 + FMA
+# Enable AVX2 + FMA + OpenMP
+find_package(OpenMP REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -O3 -march=native")
 
 add_executable(ternary_inference
@@ -12,3 +13,4 @@ add_executable(ternary_inference
 )
 
 target_include_directories(ternary_inference PRIVATE src)
+target_link_libraries(ternary_inference OpenMP::OpenMP_CXX)

@@ -34,3 +34,25 @@ __pycache__/
 # OS / junk
 # ========================
 *.Zone.Identifier
+
+# ========================
+# VTune traces & profiling
+# ========================
+r000ue/
+r001ue/
+*.vtune
+onnxruntime_profile__*.json
+*.data
+
+# ========================
+# Build binaries
+# ========================
+inference/build/
+inference/benchmark_hybrid
+
+# ========================
+# Temp / generated
+# ========================
+sym_shape_infer_temp.onnx
+claude_install.sh
+*.h.bak

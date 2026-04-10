@@ -1,0 +1,1535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ternary CNN Inference Engine — Presentation</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #0a0a0a;
+  color: #e0e0e0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.slide {
+  min-height: 100vh;
+  padding: 60px 80px;
+  position: relative;
+  border-bottom: 1px solid #222;
+}
+.slide-num {
+  position: absolute;
+  top: 20px;
+  right: 30px;
+  font-size: 14px;
+  color: #555;
+  font-weight: 600;
+}
+h1 { font-size: 48px; color: #ffffff; margin-bottom: 8px; font-weight: 700; }
+h2 { font-size: 36px; color: #ffffff; margin-bottom: 24px; font-weight: 700; }
+h3 { font-size: 22px; color: #cccccc; margin-bottom: 12px; font-weight: 600; }
+h4 { font-size: 18px; color: #bbbbbb; margin-bottom: 8px; font-weight: 600; }
+.subtitle { font-size: 22px; color: #888; margin-bottom: 16px; }
+.byline { font-size: 16px; color: #666; margin-bottom: 40px; }
+
+.cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin: 16px 0; }
+.cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin: 16px 0; }
+
+.card {
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 20px;
+  background: #141414;
+}
+.card-green {
+  border: 1px solid #166534;
+  border-radius: 10px;
+  padding: 20px;
+  background: #0a1f0a;
+}
+.card-red {
+  border: 1px solid #991b1b;
+  border-radius: 10px;
+  padding: 20px;
+  background: #1f0a0a;
+}
+.card-blue {
+  border: 1px solid #1e40af;
+  border-radius: 10px;
+  padding: 20px;
+  background: #0a0a1f;
+}
+
+.metric-card {
+  text-align: center;
+  padding: 24px;
+  border-radius: 10px;
+  background: #141414;
+  border: 1px solid #333;
+}
+.metric-card .value {
+  font-size: 42px;
+  font-weight: 700;
+  color: #4ade80;
+}
+.metric-card .label {
+  font-size: 14px;
+  color: #888;
+  margin-top: 4px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 15px;
+}
+th {
+  background: #1a1a1a;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  border: 1px solid #333;
+  color: #ccc;
+}
+td {
+  padding: 8px 14px;
+  border: 1px solid #333;
+  color: #ddd;
+}
+tr:nth-child(even) { background: #111; }
+tr.ours {
+  background: #0a1f0a !important;
+  font-weight: 700;
+  color: #4ade80;
+}
+tr.ours td { color: #4ade80; }
+
+.highlight { color: #4ade80; font-weight: 700; }
+.highlight-blue { color: #60a5fa; font-weight: 700; }
+.highlight-red { color: #f87171; font-weight: 700; }
+.highlight-yellow { color: #facc15; font-weight: 700; }
+.dim { color: #666; }
+
+code {
+  background: #1e1e2e;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'Consolas', 'Fira Code', monospace;
+  font-size: 14px;
+  color: #c4b5fd;
+}
+
+.pipeline-bar {
+  display: flex;
+  height: 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 16px 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.pipeline-bar div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.timeline { margin: 20px 0; }
+.timeline-item {
+  padding: 8px 0 8px 24px;
+  border-left: 3px solid #333;
+  position: relative;
+  margin-left: 12px;
+}
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 14px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #4ade80;
+  border: 2px solid #0a0a0a;
+}
+.timeline-item.failed::before {
+  background: #f87171;
+}
+.timeline-item.failed {
+  border-left-color: #991b1b;
+}
+.timeline-time {
+  font-size: 14px;
+  color: #888;
+  margin-right: 12px;
+}
+.timeline-label {
+  font-size: 15px;
+}
+
+.insight-card {
+  border-left: 4px solid #60a5fa;
+  background: #0a0a1f;
+  padding: 16px 20px;
+  border-radius: 0 8px 8px 0;
+  margin: 16px 0;
+}
+
+.takeaway {
+  border-left: 4px solid #facc15;
+  background: #1f1a0a;
+  padding: 16px 20px;
+  border-radius: 0 8px 8px 0;
+  margin: 16px 0;
+  font-style: italic;
+  color: #facc15;
+}
+
+.footer {
+  text-align: center;
+  padding: 24px;
+  color: #444;
+  font-size: 13px;
+  border-top: 1px solid #222;
+}
+
+.appendix-separator {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  border-bottom: 1px solid #222;
+  background: #0a0a0a;
+}
+.appendix-separator h1 {
+  font-size: 56px;
+  color: #555;
+  margin-bottom: 16px;
+}
+.appendix-separator p {
+  font-size: 20px;
+  color: #444;
+}
+
+ul { margin: 8px 0 8px 20px; }
+li { margin: 4px 0; }
+p { margin: 8px 0; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- ======================== MAIN DECK ========================= -->
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<!-- SLIDE 1: Title -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">1 / 9</div>
+  <div style="display:flex; align-items:center; justify-content:center; flex-direction:column; min-height:80vh;">
+    <h1>Ternary CNN Inference Engine</h1>
+    <p class="subtitle">High-Performance C++ Implementation for ResNet-18 on CIFAR-10</p>
+    <p class="byline">Shubham Saini &mdash; Stellon Labs Take-Home Assignment &mdash; April 2026</p>
+    <div class="cols-3" style="width:100%; max-width:800px; margin-top:40px;">
+      <div class="metric-card">
+        <div class="value">0.99ms</div>
+        <div class="label">6-Thread Latency</div>
+      </div>
+      <div class="metric-card">
+        <div class="value">94.46%</div>
+        <div class="label">Accuracy (C++ Engine)</div>
+      </div>
+      <div class="metric-card">
+        <div class="value">3.56MB</div>
+        <div class="label">Model Size (12.5x compression)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 2: Assignment Overview -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">2 / 9</div>
+  <h2>Assignment Overview</h2>
+  <div class="cols-2">
+    <div class="card">
+      <h3>What</h3>
+      <ul>
+        <li>ResNet-18 on CIFAR-10 with <span class="highlight">ternary weights {-1, 0, +1}</span></li>
+        <li>C++ inference engine from scratch</li>
+        <li>Benchmark against PyTorch and ONNX Runtime</li>
+      </ul>
+      <h3 style="margin-top:16px;">Three Parts</h3>
+      <ul>
+        <li><span class="highlight-blue">Part A:</span> Train ternary model in PyTorch</li>
+        <li><span class="highlight-blue">Part B:</span> Build C++ inference engine</li>
+        <li><span class="highlight-blue">Part C:</span> Benchmarks &amp; analysis</li>
+      </ul>
+    </div>
+    <div>
+      <div class="card-red" style="margin-bottom:16px;">
+        <h3>Key Constraint</h3>
+        <p>Ternary must actually be <span class="highlight-red">fast</span>, not just small. Memory savings alone are not enough &mdash; the engine must translate weight compression into real latency wins.</p>
+      </div>
+      <div class="card-blue">
+        <h3>Target CPU</h3>
+        <ul>
+          <li><span class="highlight-blue">Intel i5-13400F</span> (Raptor Lake)</li>
+          <li>10 cores / 16 threads</li>
+          <li>AVX2 + AVX-VNNI</li>
+          <li><code>_mm256_dpbusd_epi32</code></li>
+          <li>32 GB RAM</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 3: Training Results -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">3 / 9</div>
+  <h2>Training Results</h2>
+  <table>
+    <tr>
+      <th>Model</th>
+      <th>Accuracy</th>
+      <th>Params</th>
+      <th>Model Size</th>
+      <th>Compression</th>
+    </tr>
+    <tr>
+      <td>FP32 Baseline</td>
+      <td><span class="highlight">95.54%</span></td>
+      <td>11.17M</td>
+      <td>44.69 MB</td>
+      <td>1x</td>
+    </tr>
+    <tr class="ours">
+      <td>Ternary (TWN)</td>
+      <td>94.48%</td>
+      <td>11.17M</td>
+      <td>3.56 MB</td>
+      <td>12.5x</td>
+    </tr>
+  </table>
+  <p class="dim" style="margin-top:4px; font-size:13px;">C++ engine accuracy: 94.46% (slight quantization delta from PyTorch's 94.48%)</p>
+
+  <div class="cols-2" style="margin-top:24px;">
+    <div class="card-green">
+      <h3>TWN Ternarization Details</h3>
+      <ul>
+        <li>Threshold: &delta; = 0.7 &times; mean(|w|)</li>
+        <li>Scale: &alpha; = mean(|w| where |w| &gt; &delta;)</li>
+        <li>Straight-Through Estimator (STE) for gradients</li>
+        <li>First conv + shortcut convs stay <span class="highlight-yellow">FP32</span></li>
+      </ul>
+    </div>
+    <div class="card-blue">
+      <h3>Training Configuration</h3>
+      <ul>
+        <li>200 epochs</li>
+        <li>SGD + cosine annealing</li>
+        <li>Learning rate: 0.05</li>
+        <li>Gradient clipping: 5.0</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 4: Architecture -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">4 / 9</div>
+  <h2>Architecture: INT8-Resident Execution with Spatial-Packed dpbusd</h2>
+
+  <div class="card" style="margin-bottom:20px;">
+    <h3>Inference Pipeline</h3>
+    <p style="font-size:15px; line-height:2.2;">
+      <span style="background:#3b2f00; color:#facc15; padding:3px 8px; border-radius:4px; font-weight:600;">Input FP32</span> &rarr;
+      <span style="background:#3b2f00; color:#facc15; padding:3px 8px; border-radius:4px; font-weight:600;">Conv1 FP32 im2col</span> &rarr;
+      <span style="background:#1a0a2e; color:#c4b5fd; padding:3px 8px; border-radius:4px; font-weight:600;">fused GEMM + BN + ReLU + quantize</span> &rarr;
+      <span style="background:#0a2a0a; color:#4ade80; padding:3px 8px; border-radius:4px; font-weight:600;">uint8</span> &rarr;
+      <em style="color:#888;">For each block:</em>
+      <span style="background:#0a2a0a; color:#4ade80; padding:3px 8px; border-radius:4px; font-weight:600;">uint8</span> &rarr;
+      <span style="background:#0a1a3a; color:#60a5fa; padding:3px 8px; border-radius:4px; font-weight:600;">im2col</span> &rarr;
+      <span style="background:#0a1a3a; color:#60a5fa; padding:3px 8px; border-radius:4px; font-weight:600;">repack</span> &rarr;
+      <span style="background:#2a0a0a; color:#f87171; padding:3px 8px; border-radius:4px; font-weight:600;">14-OC dpbusd GEMM</span> &rarr;
+      <span style="background:#1a0a2e; color:#c4b5fd; padding:3px 8px; border-radius:4px; font-weight:600;">fused dequant + ReLU + requant</span> &rarr;
+      <span style="background:#0a2a0a; color:#4ade80; padding:3px 8px; border-radius:4px; font-weight:600;">uint8</span> &rarr;
+      <span style="background:#0a2a2a; color:#2dd4bf; padding:3px 8px; border-radius:4px; font-weight:600;">AvgPool</span> &rarr;
+      <span style="background:#0a2a2a; color:#2dd4bf; padding:3px 8px; border-radius:4px; font-weight:600;">FC</span> &rarr;
+      <span style="background:#0a2a2a; color:#2dd4bf; padding:3px 8px; border-radius:4px; font-weight:600;">logits</span>
+    </p>
+    <p class="dim" style="font-size:13px;">All stages parallelized via persistent <code>omp parallel</code> region. BN fused into conv scale+bias at export time.</p>
+  </div>
+
+  <div class="cols-2">
+    <div class="card-green">
+      <h3>What Stays INT8</h3>
+      <ul>
+        <li>Activations between all layers (uint8, post-ReLU)</li>
+        <li>im2col + repack operate on uint8 bytes</li>
+        <li><code>dpbusd</code>: u8 &times; i8 &rarr; i32 accumulation</li>
+        <li>Static quantization scales (calibrated offline)</li>
+        <li>Shortcut convolutions also INT8 via dpbusd</li>
+      </ul>
+    </div>
+    <div class="card-red">
+      <h3>Where FP32 Appears</h3>
+      <ul>
+        <li>First convolution (Conv1) &mdash; FP32 input, FP32 GEMM</li>
+        <li>GEMM epilogue (i32 &rarr; fp32 &rarr; scale &rarr; u8)</li>
+        <li>Residual addition (dequant + add + ReLU + requant)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 5: Key Innovation: Spatial-Packed dpbusd -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">5 / 9</div>
+  <h2>Key Innovation: Spatial-Packed dpbusd</h2>
+
+  <div class="cols-2">
+    <div class="card-red">
+      <h3>Before: Reduction-Major dpbusd</h3>
+      <ul>
+        <li>32 MACs along <span class="highlight-red">reduction dimension</span></li>
+        <li>1 spatial position per instruction</li>
+        <li>Requires <span class="highlight-red">horizontal reduce</span> after each group</li>
+        <li>Port 6 utilization: 55%</li>
+        <li>Whole-inference CPI: <span class="highlight-red">0.294</span></li>
+      </ul>
+    </div>
+    <div class="card-green">
+      <h3>After: Spatial-Packed dpbusd</h3>
+      <ul>
+        <li><span class="highlight">8 spatial &times; 4 reduction</span> per instruction</li>
+        <li>No horizontal reduce needed</li>
+        <li>GEMM kernel CPI: <span class="highlight">0.179</span> (VTune-verified)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card-blue" style="margin-top:20px;">
+    <h3>Combined with 14-OC Unrolled Tiling</h3>
+    <p>Each dpbusd instruction processes 8 spatial positions across 4 reduction elements, with 14 output channels unrolled in the outer loop. 14 accumulators + 1 activation + 1 weight = 16 YMM registers (full file). This eliminates horizontal reduction and maximizes instruction throughput.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 6: Optimization Journey -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">6 / 9</div>
+  <h2>Optimization Journey: 79ms &rarr; 0.99ms</h2>
+
+  <div class="timeline">
+    <div class="timeline-item">
+      <span class="timeline-time">79ms (1T)</span>
+      <span class="timeline-label">Naive FP32 AVX2 baseline</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">17ms (1T)</span>
+      <span class="timeline-label">Transposed dpbusd VNNI</span>
+    </div>
+    <div class="timeline-item failed">
+      <span class="timeline-time">17&ndash;50ms (1T)</span>
+      <span class="timeline-label"><span class="highlight-red">[FAILED]</span> INT16 add/sub, sign_epi16, sparse &mdash; all slower than dpbusd</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">9ms (1T)</span>
+      <span class="timeline-label">Spatial-packed dpbusd + 16-OC tiling</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">7ms (1T)</span>
+      <span class="timeline-label">INT8-resident static quantization</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">5.4ms (1T)</span>
+      <span class="timeline-label">3&times;3 stride-1 specialized im2col</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">4.9ms (1T)</span>
+      <span class="timeline-label">Preallocated workspace + fused epilogues</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">4.5ms (1T)</span>
+      <span class="timeline-label">INT8 shortcut convs via dpbusd + SIMD repack</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">3.89ms (1T) / 1.89ms (6T)</span>
+      <span class="timeline-label">14-OC unrolled GEMM &mdash; MLAS disassembly revealed register-only accumulators</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">1.14ms (6T)</span>
+      <span class="timeline-label">Parallel im2col+repack &mdash; VTune: im2col was 56% of 6T time</span>
+    </div>
+    <div class="timeline-item">
+      <span class="timeline-time">0.99ms (6T)</span>
+      <span class="timeline-label">Parallel Conv1 FP32+ReLU+quantize &mdash; fused with omp for over OC</span>
+    </div>
+  </div>
+
+  <div class="takeaway">80x total speedup &mdash; every step VTune-driven. Beats ONNX INT8 Static (1.08ms 6T).</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 7: Final Benchmark Results -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">7 / 9</div>
+  <h2>Final Benchmark Results</h2>
+
+  <table>
+    <tr>
+      <th>Engine</th>
+      <th>1-Thread</th>
+      <th>6-Thread</th>
+      <th>Accuracy</th>
+      <th>Model Size</th>
+    </tr>
+    <tr>
+      <td>PyTorch FP32</td>
+      <td>11.18ms</td>
+      <td>6.50ms</td>
+      <td style="color:#4ade80; font-weight:700;">95.54%</td>
+      <td>44.69 MB</td>
+    </tr>
+    <tr>
+      <td>PyTorch Ternary</td>
+      <td>109.14ms</td>
+      <td>33.67ms</td>
+      <td>94.48%</td>
+      <td>44.69 MB</td>
+    </tr>
+    <tr>
+      <td>ONNX FP32</td>
+      <td>9.75ms</td>
+      <td>2.49ms</td>
+      <td style="color:#4ade80; font-weight:700;">95.54%</td>
+      <td>44.69 MB</td>
+    </tr>
+    <tr>
+      <td>ONNX INT8 Dynamic</td>
+      <td>4.26ms</td>
+      <td>2.74ms</td>
+      <td>95.48%</td>
+      <td>11.23 MB</td>
+    </tr>
+    <tr>
+      <td>ONNX INT8 Static</td>
+      <td style="color:#4ade80; font-weight:700;">2.56ms</td>
+      <td>1.08ms</td>
+      <td>95.43%</td>
+      <td>11.23 MB</td>
+    </tr>
+    <tr class="ours">
+      <td>C++ Ternary Engine</td>
+      <td>3.52ms</td>
+      <td style="color:#4ade80; font-weight:700;">0.99ms</td>
+      <td>94.46%</td>
+      <td style="color:#4ade80; font-weight:700;">3.56 MB</td>
+    </tr>
+  </table>
+
+  <div class="cols-3" style="margin-top:24px;">
+    <div class="metric-card">
+      <div class="value">80x</div>
+      <div class="label">vs Naive FP32 Baseline</div>
+    </div>
+    <div class="metric-card">
+      <div class="value" style="color:#4ade80;">1.09x</div>
+      <div class="label">Faster than ONNX INT8 Static (6T)</div>
+    </div>
+    <div class="metric-card">
+      <div class="value">3.2x</div>
+      <div class="label">Smaller Model Size</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 8: Ternary vs INT8 -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">8 / 9</div>
+  <h2>Ternary vs INT8: Where Ternary Wins and Loses</h2>
+
+  <div class="cols-2">
+    <div class="card-green">
+      <h3>Where Ternary Wins</h3>
+      <ul>
+        <li><span class="highlight">Model size:</span> 3.56 MB vs 11.23 MB (3.2x smaller)</li>
+        <li><span class="highlight">Memory bandwidth:</span> Smaller weights = less data to move</li>
+        <li><span class="highlight">Edge deployment:</span> Fits in tighter memory budgets</li>
+      </ul>
+    </div>
+    <div class="card-red">
+      <h3>Where Ternary Loses</h3>
+      <ul>
+        <li><span class="highlight-red">Compute throughput:</span> dpbusd processes any INT8 value at the same speed &mdash; ternary gets no compute advantage</li>
+        <li><span class="highlight-red">Sparsity:</span> Only 14% group-level sparsity, not enough for skip-based speedup</li>
+        <li><span class="highlight-red">LUT:</span> vpshufb LUT is 1.8&ndash;4.0x slower than dpbusd on CNN layers (measured)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="insight-card" style="margin-top:20px;">
+    <h3>Key Insight</h3>
+    <p><span class="highlight-blue">LLMs</span> are memory-bandwidth bound (GEMV with huge OC &ge; 4096) &mdash; ternary weight compression directly reduces the bottleneck. <span class="highlight-yellow">CNNs</span> are compute bound (GEMM with moderate OC 64&ndash;512) &mdash; ternary compression helps model size but not compute speed. The hardware multiplier is "free" &mdash; dpbusd's 32 MACs/instruction run at the same throughput regardless of weight values.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SLIDE 9: Summary -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">9 / 9</div>
+  <h2>Summary</h2>
+
+  <div class="card-green" style="margin-bottom:24px;">
+    <h3>Delivered</h3>
+    <div class="cols-3" style="margin-bottom:16px;">
+      <div class="metric-card" style="background:#0a1f0a; border-color:#166534;">
+        <div class="value">0.99ms</div>
+        <div class="label">6-Thread Latency</div>
+      </div>
+      <div class="metric-card" style="background:#0a1f0a; border-color:#166534;">
+        <div class="value">94.46%</div>
+        <div class="label">Accuracy</div>
+      </div>
+      <div class="metric-card" style="background:#0a1f0a; border-color:#166534;">
+        <div class="value">3.56MB</div>
+        <div class="label">Model Size</div>
+      </div>
+    </div>
+    <ul>
+      <li><span class="highlight">Faster than ONNX INT8 Static</span> at 6T (0.99ms vs 1.08ms)</li>
+      <li>3.56x thread scaling at 6T (59% efficiency)</li>
+      <li>80x total speedup from naive FP32 baseline</li>
+    </ul>
+  </div>
+
+  <div class="card-blue" style="margin-bottom:24px;">
+    <h3>Key Technical Contributions</h3>
+    <ul>
+      <li><span class="highlight-blue">Spatial-packed dpbusd:</span> 8 spatial &times; 4 reduction layout eliminates horizontal reduction; GEMM kernel CPI 0.179</li>
+      <li><span class="highlight-blue">14-OC unrolled GEMM:</span> MLAS-inspired register-only accumulators; whole-inference CPI 0.294 &rarr; 0.248</li>
+      <li><span class="highlight-blue">INT8-resident pipeline:</span> Activations stay uint8 across all layer boundaries; static calibrated scales</li>
+      <li><span class="highlight-blue">VTune-driven parallelization:</span> im2col+repack and Conv1 moved from serial to <code>omp for</code></li>
+    </ul>
+  </div>
+
+  <div class="insight-card">
+    <h3>The Ternary Tradeoff</h3>
+    <p>Ternary weights deliver <span class="highlight">12.5x model compression</span> but no compute speedup on VNNI hardware &mdash; dpbusd processes {-1,0,+1} at the same throughput as arbitrary INT8. The win is memory footprint; the path to speed is the same INT8 optimization playbook.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ======================== APPENDIX ========================== -->
+<!-- ============================================================ -->
+<div class="appendix-separator">
+  <h1>Appendix</h1>
+  <p>Deep-dive backup slides &mdash; profiler evidence, failed experiments, MLAS analysis</p>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A1: VTune Microarchitecture Analysis -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A1</div>
+  <h2>VTune Microarchitecture Analysis</h2>
+  <p class="dim" style="margin-bottom:16px;">Final Engine Profile (1-Thread, VTune uarch-exploration)</p>
+
+  <div class="pipeline-bar">
+    <div style="width:67%; background:#22c55e;">GEMM+epilogue 67%</div>
+    <div style="width:28%; background:#3b82f6;">im2col+repack 28%</div>
+    <div style="width:5%; background:#f59e0b;">conv1+other 5%</div>
+  </div>
+
+  <table>
+    <tr>
+      <th>Metric</th>
+      <th>Experiment 2 (First dpbusd)</th>
+      <th>Final Engine (VTune verified)</th>
+      <th>Change</th>
+    </tr>
+    <tr>
+      <td>Whole-inference CPI</td>
+      <td>0.294</td>
+      <td class="highlight">0.248</td>
+      <td>IPC 3.4 &rarr; 4.0</td>
+    </tr>
+    <tr>
+      <td>Retiring</td>
+      <td>54.0%</td>
+      <td class="highlight">71.4%</td>
+      <td>+17.4pp</td>
+    </tr>
+    <tr>
+      <td>Back-End Bound</td>
+      <td>33.5%</td>
+      <td class="highlight">23.2%</td>
+      <td>&minus;10.3pp</td>
+    </tr>
+    <tr>
+      <td>Memory Bound</td>
+      <td>11.2%</td>
+      <td class="highlight">7.1%</td>
+      <td>&minus;4.1pp</td>
+    </tr>
+    <tr>
+      <td>Core Bound</td>
+      <td>22.3%</td>
+      <td class="highlight">16.1%</td>
+      <td>&minus;6.2pp</td>
+    </tr>
+    <tr>
+      <td>L1 Latency Dependency</td>
+      <td>&mdash;</td>
+      <td class="highlight-yellow">48.9%</td>
+      <td>Remaining bottleneck (GEMM acc register pressure)</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A2: What Didn't Work -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A2</div>
+  <h2>What Didn't Work (and Why)</h2>
+
+  <div class="cols-2">
+    <div>
+      <div class="card-red">
+        <h3>Ternary-Specific Compute Tricks</h3>
+        <ul>
+          <li><span class="highlight-red">INT16 add/sub:</span> Fewer MACs/instruction than dpbusd</li>
+          <li><span class="highlight-red">sign_epi16:</span> Requires unpacking, negation, extra shuffle</li>
+          <li><span class="highlight-red">Sparse / zero skipping:</span> Branch misprediction overhead exceeds savings (only 14% group-level sparsity)</li>
+          <li><span class="highlight-red">FP32 add/sub:</span> Wider registers but half the throughput of INT8 dpbusd</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="card-red" style="margin-bottom:16px;">
+        <h3>Three Attempts to Eliminate im2col+repack</h3>
+        <ul>
+          <li>Fused implicit GEMM: <span class="highlight-red">58ms</span> (address computation overhead)</li>
+          <li>Fused im2col &rarr; packed: <span class="highlight-red">4.71ms</span> (marginal, 3x more instructions)</li>
+          <li>Unrolled 9-pos: <span class="highlight-red">4.58ms</span> (2.2x more instructions)</li>
+        </ul>
+      </div>
+      <div class="card-red">
+        <h3>8-OC Register Tiling (Early Attempt)</h3>
+        <p>Too few OCs per tile &mdash; 2.7&times; more activation re-reads offset register benefit. Later solved with 14-OC unrolled tiling.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="takeaway">Lesson: every "obvious" optimization must be benchmarked. Fused im2col, sparse skipping, and small register tiles all looked good on paper but measured worse.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A3: im2col Deep Dive -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A3</div>
+  <h2>Deep Dive: Three Attempts to Eliminate im2col+repack</h2>
+
+  <table>
+    <tr>
+      <th>Approach</th>
+      <th>Latency</th>
+      <th>Change</th>
+      <th>Instructions</th>
+      <th>Cycles</th>
+      <th>IPC</th>
+      <th>L1 Miss</th>
+    </tr>
+    <tr>
+      <td>Baseline (separate im2col+repack)</td>
+      <td>66.1 &mu;s</td>
+      <td>&mdash;</td>
+      <td>956K</td>
+      <td>313K</td>
+      <td>3.05</td>
+      <td>1.45%</td>
+    </tr>
+    <tr>
+      <td>Fused im2col &rarr; packed</td>
+      <td>114.9 &mu;s</td>
+      <td><span class="highlight-red">+74%</span></td>
+      <td>2,885K (3.0x)</td>
+      <td>517K</td>
+      <td>5.58</td>
+      <td>0.018%</td>
+    </tr>
+    <tr>
+      <td>Unrolled 9-position</td>
+      <td>99.0 &mu;s</td>
+      <td><span class="highlight-red">+50%</span></td>
+      <td>2,138K (2.2x)</td>
+      <td>459K</td>
+      <td>4.66</td>
+      <td>0.64%</td>
+    </tr>
+  </table>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-green">
+      <h3>Why Baseline Wins Despite Worse Cache</h3>
+      <p>Only <span class="highlight">956K instructions</span>. glibc memcpy uses <code>rep movsb</code> &mdash; 1 instruction per row. Fewer total instructions beats better IPC every time.</p>
+    </div>
+    <div>
+      <div class="card-red" style="margin-bottom:12px;">
+        <h3>Fused: 3x More Instructions</h3>
+        <p>Address computation for each spatial position generates massive instruction overhead despite perfect cache behavior.</p>
+      </div>
+      <div class="card-red">
+        <h3>Unrolled: 2.2x More Instructions</h3>
+        <p>Inline AVX2 loads/stores are more instructions than <code>rep movsb</code> for 32-byte rows.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="takeaway">For 32-byte rows, glibc memcpy's <code>rep movsb</code> is 1 instruction per row &mdash; impossible to beat with explicit SIMD.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A4: 4-Bit Activation Experiments -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A4</div>
+  <h2>4-Bit Activation Experiments</h2>
+
+  <table>
+    <tr>
+      <th>Strategy</th>
+      <th>Latency (1T)</th>
+      <th>Accuracy</th>
+      <th>Slowdown</th>
+    </tr>
+    <tr>
+      <td>INT8 dpbusd baseline</td>
+      <td><span class="highlight">4.70ms</span></td>
+      <td><span class="highlight">94.46%</span></td>
+      <td>1.0x</td>
+    </tr>
+    <tr>
+      <td>4-bit sign+add</td>
+      <td><span class="highlight-red">32.91ms</span></td>
+      <td>93.56%</td>
+      <td>7.0x slower</td>
+    </tr>
+    <tr>
+      <td>4-bit nibble-packed dpbusd</td>
+      <td><span class="highlight-red">8.24ms</span></td>
+      <td>93.64%</td>
+      <td>1.75x slower</td>
+    </tr>
+  </table>
+  <p class="dim" style="font-size:13px;">Latencies measured at pre-final optimization state (before 14-OC tiling and parallelization).</p>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-red">
+      <h3>4-bit sign+add</h3>
+      <p>Without dpbusd, ternary weights require explicit sign/add operations. VTune: 165.8B instructions vs 20.3B for dpbusd &mdash; 8.2x more instructions, both well-utilized (70% vs 68% retiring). Result: <span class="highlight-red">7x slower</span>.</p>
+    </div>
+    <div class="card-red">
+      <h3>4-bit nibble-packed dpbusd</h3>
+      <p>Packing two 4-bit values into one byte halves activation storage, but the unpack/repack overhead inflated im2col from 2.7B to 27.9B instructions. Accuracy also drops by 0.82pp below the 94.46% threshold.</p>
+    </div>
+  </div>
+
+  <div class="takeaway">dpbusd processes 32 MACs per instruction in INT8. Any scheme that cannot use dpbusd natively will be slower.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A5: MLAS Analysis (merged from old slides 12+13) -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A5</div>
+  <h2>MLAS Analysis: Closing the ONNX Gap</h2>
+
+  <div class="card-green" style="margin-bottom:16px;">
+    <h3>Key Discovery: ONNX Runtime Uses MLAS, Not oneDNN</h3>
+    <p>oneDNN has <span class="highlight-red">no JIT INT8 kernels</span> for AVX-VNNI (Raptor Lake) &mdash; falls back to reference C code (<span class="highlight-red">7,400&times; slower</span>). ONNX Runtime uses <span class="highlight-blue">MLAS</span> (Microsoft Linear Algebra Subroutines) with hand-optimized AVX-VNNI kernels.</p>
+  </div>
+
+  <div class="cols-2">
+    <div class="card-blue">
+      <h3>MLAS Inner Loop (6-OC &times; 16-N)</h3>
+      <p style="font-family:monospace; font-size:12px; line-height:1.8; color:#c4b5fd; white-space:pre;">vmovdqu (%rdx), ymm0      <span style="color:#888;">; 8 u8 activations [0:7]</span>
+vmovdqu 0x20(%rdx), ymm1  <span style="color:#888;">; 8 u8 activations [8:15]</span>
+
+vpbroadcastd (%r10), ymm2  <span style="color:#888;">; OC0: weight</span>
+vpdpbusds ymm0, ymm2, ymm4  <span style="color:#888;">; OC0 acc[0:7]</span>
+vpdpbusds ymm1, ymm2, ymm5  <span style="color:#888;">; OC0 acc[8:15]</span>
+
+<span style="color:#888;">; ... OC1&rarr;ymm6/7, OC2&rarr;ymm8/9
+;     OC3&rarr;ymm10/11, OC4&rarr;ymm12/13
+;     OC5&rarr;ymm14/15</span></p>
+      <p class="dim" style="font-size:12px;">Extracted via <code>perf record</code> + <code>objdump</code>. 12 YMM register accumulators, zero stack spills.</p>
+    </div>
+    <div>
+      <table style="font-size:14px;">
+        <tr>
+          <th></th>
+          <th>Our Engine (early)</th>
+          <th>MLAS</th>
+          <th>Our Engine (final)</th>
+        </tr>
+        <tr>
+          <td>OCs per tile</td>
+          <td>8</td>
+          <td>6</td>
+          <td class="highlight">14</td>
+        </tr>
+        <tr>
+          <td>N per iteration</td>
+          <td>8 (1 ymm)</td>
+          <td>16 (2 ymm)</td>
+          <td>8 (1 ymm)</td>
+        </tr>
+        <tr>
+          <td>Accumulators</td>
+          <td class="highlight-red">Stack memory</td>
+          <td class="highlight">12 YMM regs</td>
+          <td class="highlight">14 YMM regs</td>
+        </tr>
+        <tr>
+          <td>GEMM kernel CPI</td>
+          <td>&mdash;</td>
+          <td>&mdash;</td>
+          <td class="highlight">0.179</td>
+        </tr>
+      </table>
+      <div class="card-green" style="margin-top:16px;">
+        <h3>What We Applied</h3>
+        <ul>
+          <li><span class="highlight">Register-only accumulators</span> &rarr; 14-OC unrolled GEMM</li>
+          <li><span class="highlight">Parallel data prep</span> &rarr; im2col+repack moved to <code>omp for</code></li>
+          <li><span class="highlight">Fused Conv1</span> &rarr; GEMM+ReLU+quantize in one parallel pass</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="takeaway">MLAS is fast because of register-only accumulators and NCHWc fused im2col. We adopted (1) as 14-OC unrolled GEMM. (2) remains our main 1T gap &mdash; our separate im2col+repack is 28% of 1T time.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A6: Thread Scaling Analysis -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A6</div>
+  <h2>Thread Scaling Analysis</h2>
+
+  <table>
+    <tr>
+      <th>Engine</th>
+      <th>1-Thread</th>
+      <th>6-Thread</th>
+      <th>Speedup</th>
+      <th>Efficiency</th>
+    </tr>
+    <tr class="ours">
+      <td>C++ Ternary</td>
+      <td>3.52ms</td>
+      <td>0.99ms</td>
+      <td>3.56x</td>
+      <td>59%</td>
+    </tr>
+    <tr>
+      <td>ONNX FP32</td>
+      <td>9.75ms</td>
+      <td>2.49ms</td>
+      <td>3.91x</td>
+      <td>65%</td>
+    </tr>
+    <tr>
+      <td>ONNX INT8 Static</td>
+      <td>2.56ms</td>
+      <td>1.08ms</td>
+      <td>2.37x</td>
+      <td>40%</td>
+    </tr>
+    <tr>
+      <td>PyTorch FP32</td>
+      <td>11.18ms</td>
+      <td>6.50ms</td>
+      <td>1.72x</td>
+      <td>29%</td>
+    </tr>
+  </table>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-green">
+      <h3>Measured Thread Scaling</h3>
+      <table style="font-size:13px;">
+        <tr><th>Threads</th><th>Median</th><th>Speedup</th></tr>
+        <tr><td>1T</td><td>3.52ms</td><td>1.0x</td></tr>
+        <tr><td>2T</td><td>2.03ms</td><td>1.7x</td></tr>
+        <tr><td>4T</td><td>1.34ms</td><td>2.6x</td></tr>
+        <tr class="ours"><td>6T</td><td>0.99ms</td><td>3.6x</td></tr>
+        <tr><td>8T</td><td>1.55ms</td><td>2.6x (regression)</td></tr>
+      </table>
+      <p style="margin-top:8px;">Sweet spot at 6T. 8T+ regresses due to OMP barrier contention (VTune: 33% libgomp at 6T).</p>
+    </div>
+    <div>
+      <div class="card-blue" style="margin-bottom:12px;">
+        <h3>Key Improvement: 34% &rarr; 59% Efficiency</h3>
+        <ul>
+          <li><span class="highlight-blue">Parallelized im2col+repack:</span> was serial (<code>omp single</code>), now <code>omp for</code> across K-rows and kg groups</li>
+          <li><span class="highlight-blue">Parallelized Conv1 FP32:</span> fused GEMM+ReLU+quantize with <code>omp for</code> over output channels</li>
+          <li><span class="highlight-blue">14-OC unrolled GEMM:</span> more tiles = better thread load balancing</li>
+        </ul>
+      </div>
+      <div class="card-green">
+        <h3>We Now Scale Better Than ONNX INT8</h3>
+        <p>ONNX INT8 Static: 2.37x at 6T (40% efficiency). Our engine: <span class="highlight">3.56x at 6T (59% efficiency)</span>.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A7: Cache Analysis -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A7</div>
+  <h2>Cache Analysis: VTune Memory-Access</h2>
+  <div class="cols-2">
+    <div>
+      <p class="dim" style="margin-bottom:8px;">Before: 16-OC tiling, serial im2col (VTune memory-access, 1T, 2000 runs)</p>
+      <table style="font-size:14px;">
+        <tr>
+          <th>Function</th>
+          <th>CPU %</th>
+          <th>Mem Bound</th>
+          <th>L1 Bound</th>
+          <th>Store Bound</th>
+        </tr>
+        <tr>
+          <td>dpbusd GEMM</td>
+          <td>78.1%</td>
+          <td>6.0%</td>
+          <td>2.9%</td>
+          <td>2.6%</td>
+        </tr>
+        <tr>
+          <td>im2col_u8</td>
+          <td>10.5%</td>
+          <td>0.2%</td>
+          <td><span class="highlight-yellow">5.7%</span></td>
+          <td>0.0%</td>
+        </tr>
+        <tr>
+          <td>memcpy (im2col rows)</td>
+          <td>5.1%</td>
+          <td>2.0%</td>
+          <td><span class="highlight-yellow">9.2%</span></td>
+          <td>0.6%</td>
+        </tr>
+        <tr>
+          <td>Engine::forward (Conv1)</td>
+          <td>4.0%</td>
+          <td>5.9%</td>
+          <td><span class="highlight-yellow">9.7%</span></td>
+          <td>0.8%</td>
+        </tr>
+        <tr>
+          <td>memset</td>
+          <td>1.2%</td>
+          <td>6.6%</td>
+          <td><span class="highlight-red">14.5%</span></td>
+          <td><span class="highlight-red">8.4%</span></td>
+        </tr>
+      </table>
+    </div>
+    <div>
+      <p class="dim" style="margin-bottom:8px;">After: 14-OC tiling, parallel im2col (VTune memory-access, 1T, 2000 runs)</p>
+      <table style="font-size:14px;">
+        <tr>
+          <th>Function</th>
+          <th>CPU %</th>
+          <th>Mem Bound</th>
+          <th>L1 Bound</th>
+          <th>Store Bound</th>
+        </tr>
+        <tr>
+          <td>dpbusd GEMM</td>
+          <td>87.8%</td>
+          <td>7.7%</td>
+          <td>3.7%</td>
+          <td>3.2%</td>
+        </tr>
+        <tr>
+          <td>memcpy (im2col rows)</td>
+          <td>5.9%</td>
+          <td>3.6%</td>
+          <td>5.2%</td>
+          <td>0.4%</td>
+        </tr>
+        <tr>
+          <td>Engine::forward (Conv1 FP32)</td>
+          <td>3.9%</td>
+          <td><span class="highlight-yellow">13.7%</span></td>
+          <td><span class="highlight-red">15.4%</span></td>
+          <td><span class="highlight-yellow">4.8%</span></td>
+        </tr>
+        <tr>
+          <td>memset</td>
+          <td>0.7%</td>
+          <td>6.2%</td>
+          <td>7.0%</td>
+          <td>0.0%</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-red">
+      <h3>VTune summary: Before (16-OC)</h3>
+      <ul>
+        <li>L1 miss rate: 0.82%</li>
+        <li>LLC misses: ~3.1M (per 2000 runs)</li>
+        <li>Memory Bound: 5.2% of pipeline slots</li>
+      </ul>
+    </div>
+    <div class="card-green">
+      <h3>VTune summary: After (14-OC, current)</h3>
+      <ul>
+        <li>L1 miss rate: 1.38%</li>
+        <li>LLC misses: ~3.7M (per 2000 runs)</li>
+        <li>Memory Bound: 7.7% of pipeline slots</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="insight-card" style="margin-top:12px;">
+    <p><span class="highlight-blue">What this guided:</span> im2col_u8 + memcpy consumed 15.6% of CPU time in the 16-OC engine with <span class="highlight-yellow">L1-bound hotspots</span> (5.7% and 9.2%). Parallelizing im2col with <code>omp for</code> eliminated the separate im2col_u8 pass. GEMM now dominates at 87.8% CPU &mdash; memory-bound rose modestly (6.0% &rarr; 7.7%) due to 14-OC unrolling's higher register pressure, but overall throughput improved 1.75&times;. Overall memory bound stayed low (5.2% &rarr; 7.7%) &mdash; working sets fit in L2.</p>
+  </div>
+
+  <p class="dim" style="margin-top:12px; font-size:13px;">Working set per layer: Conv1 108KB, Layer1 288KB, Layer2 144KB, Layer3 72KB, Layer4 36KB &mdash; all fit in L2 (1.25MB/core).</p>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A8: LUT Experiments -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A8</div>
+  <h2>Why LUT Doesn't Work for CNNs</h2>
+
+  <div class="card-blue" style="margin-bottom:16px;">
+    <h3>How TL2 LUT Works</h3>
+    <p>Precompute a 256-entry lookup table per weight group: for each possible uint8 activation value, store the precomputed dot product. Inference becomes a series of table lookups (<code>vpshufb</code> nibble decomposition) instead of multiply-accumulate.</p>
+  </div>
+
+  <div class="cols-2">
+    <div class="card-green">
+      <h3>Why It Works for LLMs</h3>
+      <ul>
+        <li>GEMV is <span class="highlight">memory-bandwidth bound</span></li>
+        <li>OC &ge; 4096 &mdash; massive table reuse across tokens</li>
+        <li>Table build cost amortized over many queries</li>
+      </ul>
+    </div>
+    <div class="card-red">
+      <h3>Why It Fails for CNNs</h3>
+      <ul>
+        <li><span class="highlight-red">Low OC</span> (64&ndash;512) &mdash; insufficient reuse</li>
+        <li>GEMM not GEMV &mdash; compute bound, not memory bound</li>
+        <li>Per-weight LUT table thrashes L1 at high K (layer4: 512&times;4608 tables)</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="dim" style="margin:12px 0 8px;">Measured: dpbusd vs LUT microbenchmark (1T, median of 1000 runs, CIFAR-10 ResNet-18 layer sizes)</p>
+  <table style="font-size:14px;">
+    <tr>
+      <th>Layer</th>
+      <th>dpbusd</th>
+      <th>LUT scalar</th>
+      <th>LUT gather</th>
+      <th>LUT vpshufb</th>
+      <th>Best LUT / dpbusd</th>
+    </tr>
+    <tr>
+      <td>layer1 (64 OC, 32&times;32)</td>
+      <td>1.16ms</td>
+      <td>16.76ms</td>
+      <td>11.30ms</td>
+      <td><span class="highlight">2.29ms</span></td>
+      <td><span class="highlight-red">2.0&times;</span></td>
+    </tr>
+    <tr>
+      <td>layer2 (128 OC, 16&times;16)</td>
+      <td>1.13ms</td>
+      <td>18.45ms</td>
+      <td>12.58ms</td>
+      <td><span class="highlight">2.33ms</span></td>
+      <td><span class="highlight-red">2.1&times;</span></td>
+    </tr>
+    <tr>
+      <td>layer3 (256 OC, 8&times;8)</td>
+      <td>1.34ms</td>
+      <td>24.96ms</td>
+      <td>18.16ms</td>
+      <td><span class="highlight">2.41ms</span></td>
+      <td><span class="highlight-red">1.8&times;</span></td>
+    </tr>
+    <tr>
+      <td>layer4 (512 OC, 4&times;4)</td>
+      <td>1.39ms</td>
+      <td>46.54ms</td>
+      <td>42.21ms</td>
+      <td><span class="highlight">5.57ms</span></td>
+      <td><span class="highlight-red">4.0&times;</span></td>
+    </tr>
+  </table>
+
+  <div class="card-blue" style="margin-top:16px;">
+    <h3>Why LUT Loses: perf stat (layer2, 128 OC, 5000 iterations)</h3>
+    <table style="font-size:14px;">
+      <tr>
+        <th>Metric</th>
+        <th>dpbusd</th>
+        <th>vpshufb</th>
+        <th>Ratio</th>
+      </tr>
+      <tr>
+        <td>Instructions</td>
+        <td>55.6B</td>
+        <td><span class="highlight-red">153.7B</span></td>
+        <td><span class="highlight-red">2.76&times;</span></td>
+      </tr>
+      <tr>
+        <td>Cycles</td>
+        <td>25.7B</td>
+        <td>52.0B</td>
+        <td>2.02&times;</td>
+      </tr>
+      <tr>
+        <td>IPC</td>
+        <td>2.16</td>
+        <td><span class="highlight">2.96</span></td>
+        <td>vpshufb is <em>better</em></td>
+      </tr>
+      <tr>
+        <td>L1 miss rate</td>
+        <td><span class="highlight-red">53.3%</span></td>
+        <td><span class="highlight">2.4%</span></td>
+        <td>dpbusd misses more</td>
+      </tr>
+    </table>
+    <p style="margin-top:8px; font-size:13px;"><span class="highlight-blue">Root cause: instruction count.</span> vpshufb has better IPC and far better cache behavior, but generates 2.76&times; more instructions. dpbusd compresses 32 MACs into 1 instruction (8 spatial &times; 4 reduction). vpshufb needs ~15 instructions for 32 MACs (load + 2 nibble splits + 2 table broadcasts + 2 shuffles + 4 sign-extends + 4 adds). The hardware multiplier is free &mdash; replacing it with lookups just adds work.</p>
+  </div>
+
+  <div class="takeaway">LUT loses on instruction count, not cache or IPC. dpbusd = 3 instructions per 32 MACs; vpshufb = 15 instructions per 32 MACs. Better cache behavior cannot compensate for 2.76&times; more instructions.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A9: Engine vs ONNX Runtime -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A9</div>
+  <h2>Our Engine vs ONNX Runtime: Under the Hood</h2>
+
+  <div class="cols-2">
+    <div class="card-blue">
+      <h3>ONNX Runtime + MLAS</h3>
+      <ul>
+        <li><span class="highlight-blue">NCHWc blocked layout</span> &mdash; fused im2col inside QLinearConv kernel</li>
+        <li>6-OC &times; 16-N register-tiled micro-kernel</li>
+        <li>12 YMM register accumulators (no stack spills)</li>
+        <li><span class="highlight-blue">Not oneDNN</span> &mdash; oneDNN has no JIT INT8 for AVX-VNNI</li>
+      </ul>
+    </div>
+    <div class="card-green">
+      <h3>C++ Ternary Engine</h3>
+      <ul>
+        <li>im2col (specialized 3&times;3 stride-1) + SIMD repack</li>
+        <li>Spatial-packed dpbusd GEMM (14-OC unrolled)</li>
+        <li>Fused epilogue (ReLU + requant)</li>
+        <li>INT8 resident throughout</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-green">
+      <h3>Where We Win</h3>
+      <ul>
+        <li><span class="highlight">6T: 0.99ms vs 1.08ms</span> (better thread scaling: 59% vs 40% efficiency)</li>
+        <li><span class="highlight">3.2x smaller model</span> (3.56 MB vs 11.23 MB)</li>
+      </ul>
+    </div>
+    <div class="card-blue">
+      <h3>Where MLAS Still Wins (1T)</h3>
+      <ul>
+        <li><span class="highlight-blue">NCHWc + fused im2col</span> eliminates our 28% im2col+repack overhead</li>
+        <li>ONNX INT8 Static 1T: 2.56ms vs our 3.52ms</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A10: oneDNN vs MLAS Investigation -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A10</div>
+  <h2>oneDNN vs MLAS Investigation</h2>
+
+  <div class="cols-2">
+    <div class="card-red">
+      <h3>oneDNN: Dead End on This CPU</h3>
+      <table style="font-size:14px;">
+        <tr><th>Primitive</th><th>Implementation</th><th>Time</th></tr>
+        <tr><td>INT8 conv</td><td class="highlight-red">ref:any (reference C)</td><td>56,000 &mu;s</td></tr>
+        <tr><td>FP32 conv</td><td>x64:gemm:jit</td><td>440 &mu;s</td></tr>
+        <tr><td>Our dpbusd</td><td>AVX-VNNI intrinsics</td><td class="highlight">7.6 &mu;s</td></tr>
+      </table>
+      <p style="margin-top:12px;">oneDNN's INT8 JIT requires <span class="highlight-red">AVX-512 VNNI</span> (server CPUs) or <span class="highlight-red">AMX</span> (Sapphire Rapids+). On Raptor Lake's AVX-VNNI, it falls back to unoptimized C &mdash; <span class="highlight-red">7,400&times; slower</span>.</p>
+    </div>
+    <div class="card-blue">
+      <h3>MLAS: The Real Speedup Source</h3>
+      <p>MLAS has hand-tuned AVX-VNNI kernels with <span class="highlight">1,902 vpdpbusd</span> instructions per inference &mdash; fully optimized for this CPU class.</p>
+      <div class="insight-card" style="margin-top:12px;">
+        <p><span class="highlight-blue">Historical note:</span> Early analysis projected a hybrid approach (our FP32 + MLAS ternary) at ~3.95ms. This was superseded by our own optimizations which achieved 3.52ms 1T / 0.99ms 6T.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="takeaway">Library choice matters: oneDNN targets servers (AVX-512), MLAS targets all x86 including consumer AVX-VNNI. Always verify JIT dispatch with <code>DNNL_VERBOSE=1</code>.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A11: Thread Scaling vs ONNX — Honest Comparison -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A11</div>
+  <h2>Thread Scaling vs ONNX INT8 Static: Why We Lose at Every Thread Count</h2>
+
+  <p class="dim" style="margin-bottom:12px;">ONNX INT8 Static with <code>intra_op_num_threads</code> properly set (not default). Median of 500 runs each.</p>
+
+  <table>
+    <tr>
+      <th>Threads</th>
+      <th>C++ Ternary</th>
+      <th>ONNX INT8 Static</th>
+      <th>C++ Scaling</th>
+      <th>ONNX Scaling</th>
+      <th>C++ Efficiency</th>
+      <th>ONNX Efficiency</th>
+      <th>Gap</th>
+    </tr>
+    <tr>
+      <td>1T</td>
+      <td>3.66ms</td>
+      <td><span class="highlight">2.36ms</span></td>
+      <td>1.00x</td>
+      <td>1.00x</td>
+      <td>100%</td>
+      <td>100%</td>
+      <td><span class="highlight-red">+55%</span></td>
+    </tr>
+    <tr>
+      <td>2T</td>
+      <td>2.06ms</td>
+      <td><span class="highlight">1.43ms</span></td>
+      <td>1.77x</td>
+      <td>1.65x</td>
+      <td><span class="highlight">88.6%</span></td>
+      <td>82.4%</td>
+      <td><span class="highlight-red">+44%</span></td>
+    </tr>
+    <tr>
+      <td>3T</td>
+      <td>1.59ms</td>
+      <td><span class="highlight">0.95ms</span></td>
+      <td>2.29x</td>
+      <td>2.48x</td>
+      <td>76.5%</td>
+      <td>82.8%</td>
+      <td><span class="highlight-red">+68%</span></td>
+    </tr>
+    <tr>
+      <td>4T</td>
+      <td>1.35ms</td>
+      <td><span class="highlight">0.86ms</span></td>
+      <td>2.72x</td>
+      <td>2.75x</td>
+      <td>68.0%</td>
+      <td>68.9%</td>
+      <td><span class="highlight-red">+57%</span></td>
+    </tr>
+    <tr>
+      <td>5T</td>
+      <td>1.04ms</td>
+      <td><span class="highlight">0.79ms</span></td>
+      <td><span class="highlight">3.53x</span></td>
+      <td>2.99x</td>
+      <td><span class="highlight">70.6%</span></td>
+      <td>59.8%</td>
+      <td><span class="highlight-yellow">+32%</span></td>
+    </tr>
+    <tr>
+      <td>6T</td>
+      <td>1.00ms</td>
+      <td><span class="highlight">0.68ms</span></td>
+      <td><span class="highlight">3.66x</span></td>
+      <td>3.47x</td>
+      <td><span class="highlight">61.1%</span></td>
+      <td>57.9%</td>
+      <td><span class="highlight-red">+47%</span></td>
+    </tr>
+  </table>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-red">
+      <h3>Where We Lose: 1T Kernel (55% gap)</h3>
+      <p>MLAS fuses im2col inside the GEMM kernel via NCHWc blocked layout. Our separate im2col+repack consumes <span class="highlight-red">28% of 1T time</span>. This is a fundamental architectural gap &mdash; we'd need a production-grade fused GEMM library to close it.</p>
+    </div>
+    <div class="card-green">
+      <h3>Where We Win: Thread Scaling</h3>
+      <p>Our explicit <code>omp for</code> parallelization of im2col, repack, and Conv1 gives better scaling at 5&ndash;6T:</p>
+      <ul>
+        <li>5T: <span class="highlight">70.6%</span> efficiency vs ONNX 59.8%</li>
+        <li>6T: <span class="highlight">61.1%</span> efficiency vs ONNX 57.9%</li>
+      </ul>
+      <p style="margin-top:8px;">The gap narrows from 55% (1T) to 32% (5T) &mdash; but the kernel gap is too large for scaling alone to close.</p>
+    </div>
+  </div>
+
+  <div class="insight-card" style="margin-top:16px;">
+    <p><span class="highlight-blue">Default vs tuned ONNX:</span> With <span class="highlight-yellow">default settings</span> (no explicit thread config), ONNX auto-selects all 16 logical threads on our 10-core CPU, causing contention &mdash; result: <span class="highlight">1.05ms</span>, and we win at 0.99ms. With <span class="highlight-yellow">tuned settings</span> (<code>intra_op_num_threads=6</code>), ONNX achieves <span class="highlight-red">0.68ms</span>, and we lose. Main deck comparison is against default (out-of-the-box) ONNX. This slide shows the tuned comparison.</p>
+  </div>
+
+  <div class="takeaway">Better parallel region (61% vs 58% efficiency), worse kernel (55% slower at 1T). We beat default ONNX at 6T, but not tuned ONNX. The remaining gap is architectural: fused im2col inside GEMM vs separate passes.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APPENDIX A12: Why No Instruction Beats dpbusd -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="slide-num">A12</div>
+  <h2>Why No Other Instruction Matches dpbusd</h2>
+
+  <div class="card-blue" style="margin-bottom:20px;">
+    <h3>The Core Question</h3>
+    <p>Ternary weights are {-1, 0, +1} &mdash; every multiply is trivial. Can we skip the multiplier and use simpler add/sub/lookup instructions instead? <span class="highlight-red">No.</span> We benchmarked every alternative on the AVX2+VNNI ISA.</p>
+  </div>
+
+  <table>
+    <tr>
+      <th>Instruction</th>
+      <th>Operation</th>
+      <th>Useful Ops / Instr</th>
+      <th>Throughput</th>
+      <th>Why Slower</th>
+    </tr>
+    <tr class="ours">
+      <td><code>dpbusd</code> (VNNI)</td>
+      <td>u8 &times; i8 &rarr; i32 accumulate</td>
+      <td><span class="highlight">32 MACs</span></td>
+      <td>1 cycle</td>
+      <td>&mdash;</td>
+    </tr>
+    <tr>
+      <td><code>maddubs_epi16</code></td>
+      <td>u8 &times; i8 &rarr; i16 (pre-VNNI)</td>
+      <td>16 MACs</td>
+      <td>1 cycle</td>
+      <td>Half throughput + needs horizontal add to i32</td>
+    </tr>
+    <tr>
+      <td><code>add_epi16</code> (ternary add/sub)</td>
+      <td>Conditional add or subtract</td>
+      <td>16 adds</td>
+      <td>1 cycle</td>
+      <td>Half throughput + branch/sign logic overhead</td>
+    </tr>
+    <tr>
+      <td><code>sign_epi16</code> (branchless)</td>
+      <td>Negate by sign mask</td>
+      <td>16 ops</td>
+      <td>1 cycle</td>
+      <td>Same port saturation + unpack overhead</td>
+    </tr>
+    <tr>
+      <td><code>add_epi32</code> / <code>sub_epi32</code></td>
+      <td>INT32 add/sub per lane</td>
+      <td>8 ops</td>
+      <td>1 cycle</td>
+      <td><span class="highlight-red">4&times; fewer ops</span> per instruction</td>
+    </tr>
+    <tr>
+      <td><code>add_ps</code> (FP32 add/sub)</td>
+      <td>FP32 add per lane</td>
+      <td>8 ops</td>
+      <td>1 cycle</td>
+      <td><span class="highlight-red">4&times; fewer ops</span> + wider data (4 bytes vs 1)</td>
+    </tr>
+    <tr>
+      <td><code>vpshufb</code> (LUT)</td>
+      <td>16-entry nibble lookup</td>
+      <td>32 lookups</td>
+      <td>1 cycle</td>
+      <td>Needs nibble decomposition &rarr; <span class="highlight-red">2.76&times; more total instructions</span></td>
+    </tr>
+  </table>
+
+  <div class="cols-2" style="margin-top:20px;">
+    <div class="card-green">
+      <h3>Why dpbusd Wins</h3>
+      <ul>
+        <li><span class="highlight">32 MACs in 1 instruction, 1-cycle throughput</span></li>
+        <li>The hardware multiplier costs zero extra cycles &mdash; it is fused into the datapath</li>
+        <li>Any scheme that avoids the multiply also gives up dpbusd's 32-wide accumulate</li>
+        <li>You cannot beat "free multiply + 32 ops/cycle" by cleverly avoiding a free operation</li>
+      </ul>
+    </div>
+    <div class="card-red">
+      <h3>Measured Evidence (Experiments 3&ndash;6, 18)</h3>
+      <ul>
+        <li>INT16 add/sub: <span class="highlight-red">17.5ms</span> vs dpbusd 9ms</li>
+        <li>FP32 add/sub: <span class="highlight-red">81ms</span> vs dpbusd 9ms</li>
+        <li>4-bit sign+add: <span class="highlight-red">32.9ms</span> vs dpbusd 4.7ms (8.2&times; more instructions, VTune verified)</li>
+        <li>vpshufb LUT: <span class="highlight-red">1.8&ndash;4.0&times;</span> slower across all layers</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="takeaway">The multiplier is free in silicon. Ternary's "trivial multiply" provides no compute advantage on VNNI hardware &mdash; dpbusd processes {-1,0,+1} at the same 32 MACs/cycle as arbitrary INT8. The only wider option would be AVX-512 dpbusd (64 MACs/instr), but that's the same instruction, just wider.</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FOOTER -->
+<!-- ============================================================ -->
+<div class="footer">
+  Ternary CNN Inference Engine &mdash; Shubham Saini &mdash; Stellon Labs 2026
+</div>
+
+</body>
+</html>

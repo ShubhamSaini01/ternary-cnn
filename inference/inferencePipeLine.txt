@@ -1,0 +1,33 @@
+FP32 input image
+    │
+    ▼
+FP32 stem conv (layer 0) + ReLU → FP32
+    │
+    ▼
+═══ Basic Block (×8) ═══════════════════════════
+    │
+    ├─── Conv1 path:
+    │    FP32 input
+    │    → dynamic absmax → INT8 quantize+pad
+    │    → INT8 im2col → VNNI interleave (u8)
+    │    → vpdpbusd (u8 × s8 → s32)
+    │    → dequant s32 → FP32 (apply fused_scale, fused_bias, ReLU)
+    │    → dynamic absmax → requant FP32 → INT8 ← (passthrough buffer)
+    │
+    ├─── Shortcut path (if downsample):
+    │    FP32 input → FP32 1×1 conv → FP32
+    │
+    ├─── Conv2 path:
+    │    INT8 passthrough ← (from conv1, NO requantize!)
+    │    → pad INT8 (just memcpy, no absmax)
+    │    → INT8 im2col → VNNI interleave (u8)
+    │    → vpdpbusd (u8 × s8 → s32)
+    │    → dequant s32 → FP32 (apply fused_scale, fused_bias)
+    │    → ADD FP32 residual (shortcut or identity)
+    │    → ReLU
+    │    → FP32 output
+    │
+═══════════════════════════════════════════════
+    │
+    ▼
+FP32 global avg pool → FP32 FC → logits

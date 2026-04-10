@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ternary Engine — Interactive Decision Explorer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; }
+
+.header {
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+    padding: 20px 30px; border-bottom: 2px solid #2563eb;
+}
+.header h1 { font-size: 24px; color: #fff; }
+.header p { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+
+.layout { display: flex; height: calc(100vh - 70px); }
+
+/* Left: Tree */
+.tree-panel {
+    width: 380px; min-width: 380px; overflow-y: auto; padding: 16px;
+    border-right: 1px solid #1e293b; background: #0f0f1a;
+}
+.tree-panel h2 { font-size: 14px; color: #60a5fa; margin-bottom: 12px; }
+
+/* Right: Detail */
+.detail-panel {
+    flex: 1; overflow-y: auto; padding: 24px 32px;
+}
+.detail-panel h2 { font-size: 22px; color: #fff; margin-bottom: 6px; }
+.detail-panel .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 20px; }
+
+/* Tree nodes */
+.tree-node { margin-left: 0; }
+.tree-children { margin-left: 20px; border-left: 1px solid #1e293b; }
+.node-btn {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: none; border: none; color: #e0e0e0; font-size: 12px;
+    padding: 5px 8px; cursor: pointer; text-align: left; border-radius: 4px;
+    transition: background 0.15s;
+}
+.node-btn:hover { background: #1e293b; }
+.node-btn.active { background: #1e3a5f; color: #60a5fa; }
+.node-btn .icon { width: 18px; text-align: center; flex-shrink: 0; font-size: 14px; }
+.node-btn .badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: auto; font-weight: 700;
+}
+.badge-fp32 { background: #451a03; color: #fbbf24; }
+.badge-u8 { background: #052e16; color: #34d399; }
+.badge-i8 { background: #1e1b4b; color: #a5b4fc; }
+.badge-simd { background: #2e1065; color: #c4b5fd; }
+.badge-fail { background: #450a0a; color: #fca5a5; }
+.badge-win { background: #052e16; color: #6ee7b7; }
+.badge-ms { background: #172554; color: #93c5fd; }
+
+.toggle-btn {
+    width: 16px; height: 16px; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 10px; color: #64748b; cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* Detail content */
+.detail-section { margin-bottom: 20px; }
+.detail-section h3 { font-size: 15px; color: #60a5fa; margin-bottom: 8px; }
+.detail-section p, .detail-section li { font-size: 13px; line-height: 1.6; color: #cbd5e1; }
+.detail-section ul { padding-left: 20px; }
+.detail-section li { margin-bottom: 4px; }
+
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+.info-card {
+    background: #111827; border: 1px solid #1e293b; border-radius: 8px; padding: 12px;
+}
+.info-card h4 { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+.info-card .val { font-size: 20px; font-weight: 700; }
+.info-card .sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+.val-green { color: #34d399; }
+.val-red { color: #f87171; }
+.val-blue { color: #60a5fa; }
+.val-yellow { color: #fbbf24; }
+
+table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+th { background: #1e293b; color: #93c5fd; padding: 6px 10px; text-align: left; }
+td { padding: 5px 10px; border-bottom: 1px solid #1e293b; }
+tr:hover { background: #111827; }
+.best { color: #34d399; font-weight: 700; }
+.worst { color: #f87171; }
+
+pre {
+    background: #111827; border: 1px solid #1e293b; border-radius: 6px;
+    padding: 10px; font-size: 11px; line-height: 1.5; overflow-x: auto;
+    font-family: 'Consolas', 'Fira Code', monospace; color: #a5f3fc; margin: 8px 0;
+}
+
+.decision-box {
+    border-radius: 8px; padding: 12px; margin: 10px 0;
+}
+.decision-win { background: #052e16; border: 1px solid #059669; }
+.decision-fail { background: #1c0a0a; border: 1px solid #dc2626; }
+.decision-info { background: #0c1929; border: 1px solid #2563eb; }
+.decision-box h4 { font-size: 13px; margin-bottom: 6px; }
+.decision-win h4 { color: #34d399; }
+.decision-fail h4 { color: #f87171; }
+.decision-info h4 { color: #60a5fa; }
+.decision-box p { font-size: 12px; color: #94a3b8; }
+
+.bar-chart { display: flex; height: 28px; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.bar-chart div {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600; color: #fff;
+}
+
+.breadcrumb { font-size: 11px; color: #64748b; margin-bottom: 12px; }
+.breadcrumb span { color: #475569; }
+
+.tab-bar { display: flex; gap: 4px; margin-bottom: 12px; }
+.tab-btn {
+    padding: 5px 12px; border-radius: 4px; border: 1px solid #1e293b;
+    background: #0f172a; color: #94a3b8; font-size: 11px; cursor: pointer;
+}
+.tab-btn.active { background: #1e3a5f; color: #60a5fa; border-color: #2563eb; }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <h1>Ternary Inference Engine &mdash; Interactive Decision Explorer</h1>
+    <p>Click any node to see details, data types, sizes, VTune/perf numbers, and what we tried. Green = chosen path. Red = failed experiment.</p>
+</div>
+
+<div class="layout">
+    <div class="tree-panel" id="treePanel">
+        <h2>Forward Pass Decision Tree</h2>
+        <div id="tree"></div>
+    </div>
+    <div class="detail-panel" id="detailPanel">
+        <div id="detailContent">
+            <h2>Welcome</h2>
+            <p class="subtitle">Click any node in the tree to explore the inference pipeline.</p>
+            <p style="color:#94a3b8; font-size:13px; margin-top:16px;">
+                The tree traces one image through the engine. Each node shows the data transformation,
+                its shape and dtype, and the optimization decisions made. Red branches show
+                approaches we tried that were slower &mdash; with VTune/perf evidence for <em>why</em>.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// DECISION TREE DATA
+// ══════════════════════════════════════════════════════════════
+
+const nodes = {
+
+// ─── INPUT ───
+"input": {
+    label: "Input Image", icon: "🖼", badge: "FP32", badgeClass: "badge-fp32",
+    title: "Input Image",
+    subtitle: "CIFAR-10, normalized",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Shape</h4><div class="val val-yellow">[1, 3, 32, 32]</div><div class="sub">3 channels (RGB), 32&times;32 pixels</div></div>
+        <div class="info-card"><h4>Size</h4><div class="val val-yellow">12 KB</div><div class="sub">3072 &times; 4 bytes (float32)</div></div>
+        <div class="info-card"><h4>Data Type</h4><div class="val val-yellow">float32</div><div class="sub">Normalized: (pixel/255 - mean) / std</div></div>
+        <div class="info-card"><h4>Value Range</h4><div class="val val-yellow">[-2.18, 2.70]</div><div class="sub">mean=-0.24, can be negative</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>Why FP32?</h3>
+        <p>Raw input pixels are continuous-valued. We need FP32 to represent the full normalized range. Quantization happens <em>after</em> the first conv+ReLU, when all values are non-negative.</p>
+    </div>
+    `,
+    children: ["conv1"]
+},
+
+// ─── CONV1 (FP32) ───
+"conv1": {
+    label: "Conv1 (FP32 GEMM)", icon: "⚙", badge: "FP32", badgeClass: "badge-fp32",
+    title: "First Conv: FP32 GEMM + BN + ReLU",
+    subtitle: "The ONLY FP32 conv in the entire network",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Operation</h4><div class="val val-yellow">3&rarr;64ch</div><div class="sub">3&times;3 kernel, stride 1, pad 1</div></div>
+        <div class="info-card"><h4>Output</h4><div class="val val-yellow">[1, 64, 32, 32]</div><div class="sub">256 KB (float32)</div></div>
+        <div class="info-card"><h4>im2col size</h4><div class="val val-yellow">108 KB</div><div class="sub">[27 &times; 1024] float32</div></div>
+        <div class="info-card"><h4>SIMD</h4><div class="val val-blue">AVX2 FMA</div><div class="sub">fmadd_ps: 8 floats/cycle</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>Why FP32 for this layer?</h3>
+        <p>Input is float with negative values [-2.18, 2.70]. Can't use uint8 quantization (which assumes non-negative post-ReLU). After this conv + ReLU, all values become &ge; 0 and we quantize to uint8.</p>
+        <h3>BN Fusion</h3>
+        <p>BatchNorm is fused at model load: <code>fused_weight = conv_weight &times; bn_scale / sqrt(var + eps)</code>, <code>fused_bias = bn_bias - bn_mean &times; fused_scale</code>. Zero runtime cost.</p>
+    </div>
+    <div class="decision-info">
+        <h4>VTune Profile: 3.5% of inference time</h4>
+        <p>CPI=0.366, 44.3% retiring, 43.2% backend bound, 50.9% memory bound. FP32 data is 4&times; larger than uint8 &mdash; this is why we move to INT8 ASAP.</p>
+    </div>
+    `,
+    children: ["relu1", "conv1_alt_int8"]
+},
+
+"conv1_alt_int8": {
+    label: "Alt: Quantize input first?", icon: "✗", badge: "NOT DONE", badgeClass: "badge-fail",
+    title: "Alternative: Quantize Input to UINT8 Before Conv1",
+    subtitle: "Could save 4x data movement but loses precision on negative inputs",
+    content: `
+    <div class="decision-fail">
+        <h4>Why we didn't do this</h4>
+        <p>Input has negative values [-2.18, 2.70]. UINT8 can only represent [0, 255]. We'd need INT8 (signed) with a zero-point, which complicates the quantization and dpbusd expects unsigned activations. The first conv is only 3.5% of time &mdash; not worth the complexity.</p>
+    </div>
+    `,
+    children: []
+},
+
+"relu1": {
+    label: "ReLU (in-place)", icon: "⚡", badge: "FP32", badgeClass: "badge-fp32",
+    title: "ReLU Activation",
+    subtitle: "Makes all values non-negative &mdash; enables uint8 quantization",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Before ReLU</h4><div class="val val-yellow">[-0.85, 1.15]</div><div class="sub">45% of values are negative</div></div>
+        <div class="info-card"><h4>After ReLU</h4><div class="val val-green">[0, 1.15]</div><div class="sub">All values &ge; 0, mean=0.054</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>Why this matters</h3>
+        <p>Post-ReLU activations are always &ge; 0. This means we can use <strong>uint8 with zero_point=0</strong>: <code>real = uint8 &times; scale</code>. No offset needed. This simplifies the entire quantization pipeline.</p>
+        <p style="margin-top:8px;"><strong>SIMD:</strong> <code>_mm256_max_ps(value, zero)</code> &mdash; one instruction per 8 floats.</p>
+    </div>
+    `,
+    children: ["quantize"]
+},
+
+// ─── QUANTIZE ───
+"quantize": {
+    label: "Quantize FP32 → UINT8", icon: "🔢", badge: "FP32→U8", badgeClass: "badge-u8",
+    title: "Static Quantization: FP32 &rarr; UINT8",
+    subtitle: "All activations stay uint8 from here until final avgpool",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Input</h4><div class="val val-yellow">FP32</div><div class="sub">[1, 64, 32, 32] = 256 KB</div></div>
+        <div class="info-card"><h4>Output</h4><div class="val val-green">UINT8</div><div class="sub">[1, 64, 32, 32] = 64 KB (4&times; smaller!)</div></div>
+        <div class="info-card"><h4>Scale</h4><div class="val val-blue">0.009273</div><div class="sub">real = u8 &times; 0.009273</div></div>
+        <div class="info-card"><h4>Sparsity</h4><div class="val val-blue">59% zeros</div><div class="sub">range [0, 124] out of [0, 255]</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>Static vs Dynamic Quantization</h3>
+        <table>
+            <tr><th>Aspect</th><th>Static (ours)</th><th>Dynamic (ONNX INT8 Dyn)</th></tr>
+            <tr><td>Scale computation</td><td class="best">Offline (calibration set)</td><td>Runtime (per-tensor min/max)</td></tr>
+            <tr><td>Runtime cost</td><td class="best">Zero (scale is a constant)</td><td>Reduction over entire tensor</td></tr>
+            <tr><td>Accuracy</td><td>Slightly lower (fixed range)</td><td>Slightly higher (adaptive)</td></tr>
+        </table>
+        <p style="margin-top:8px;"><strong>SIMD:</strong> <code>cvtps_epi32 &rarr; packus_epi32 &rarr; packus_epi16</code> converts 8 floats to 8 uint8 per iteration.</p>
+    </div>
+    <div class="decision-win">
+        <h4>Decision: Static quantization over dynamic</h4>
+        <p>Eliminated 24.5% FP32 im2col overhead + 9.7% findmax overhead from Experiment 10. Scales calibrated on 1000 training images.</p>
+    </div>
+    `,
+    children: ["quantize_alt_dynamic", "block_pipeline"]
+},
+
+"quantize_alt_dynamic": {
+    label: "Alt: Dynamic quantization", icon: "✗", badge: "SLOWER", badgeClass: "badge-fail",
+    title: "Alternative: Dynamic Quantization (per-layer)",
+    subtitle: "Compute min/max at runtime like ONNX INT8 Dynamic",
+    content: `
+    <div class="decision-fail">
+        <h4>Result: +34% overhead (Experiment 10)</h4>
+        <p>For layer1 (64&times;32&times;32 = 65K values), finding max requires a reduction over the full tensor. Then the im2col operates on FP32 (4&times; more data). ONNX INT8 Dynamic is 2.74ms vs our 2.11ms at 6T partly because of this overhead.</p>
+    </div>
+    `,
+    children: []
+},
+
+// ─── BLOCK PIPELINE ───
+"block_pipeline": {
+    label: "INT8-Resident Block Pipeline (×8)", icon: "🔁", badge: "U8", badgeClass: "badge-u8",
+    title: "ResNet Block Pipeline (8 blocks, INT8-Resident)",
+    subtitle: "Each block: Conv1 → Conv2 + Residual Add → output uint8",
+    content: `
+    <div class="detail-section">
+        <h3>Block Structure</h3>
+        <table>
+            <tr><th>Block</th><th>Input</th><th>OC</th><th>Spatial</th><th>Act Size</th><th>Stride</th><th>Shortcut?</th></tr>
+            <tr><td>layer1.0</td><td>64ch 32&times;32</td><td>64</td><td>1024</td><td>64 KB</td><td>1</td><td>Identity</td></tr>
+            <tr><td>layer1.1</td><td>64ch 32&times;32</td><td>64</td><td>1024</td><td>64 KB</td><td>1</td><td>Identity</td></tr>
+            <tr style="background:#1a1a0a;"><td>layer2.0</td><td>64ch 32&times;32</td><td>128</td><td>256</td><td>32 KB</td><td>2</td><td>1&times;1 conv</td></tr>
+            <tr><td>layer2.1</td><td>128ch 16&times;16</td><td>128</td><td>256</td><td>32 KB</td><td>1</td><td>Identity</td></tr>
+            <tr style="background:#1a1a0a;"><td>layer3.0</td><td>128ch 16&times;16</td><td>256</td><td>64</td><td>16 KB</td><td>2</td><td>1&times;1 conv</td></tr>
+            <tr><td>layer3.1</td><td>256ch 8&times;8</td><td>256</td><td>64</td><td>16 KB</td><td>1</td><td>Identity</td></tr>
+            <tr style="background:#1a1a0a;"><td>layer4.0</td><td>256ch 8&times;8</td><td>512</td><td>16</td><td>8 KB</td><td>2</td><td>1&times;1 conv</td></tr>
+            <tr><td>layer4.1</td><td>512ch 4&times;4</td><td>512</td><td>16</td><td>8 KB</td><td>1</td><td>Identity</td></tr>
+        </table>
+        <p style="margin-top:8px;">Notice: activations shrink from 64KB to 8KB as spatial decreases. Sparsity increases (59% &rarr; 76% zeros in deeper layers).</p>
+    </div>
+    <div class="decision-win">
+        <h4>Key: Zero malloc on hot path</h4>
+        <p>3 preallocated uint8 buffers (ping-pong) + 2 float32 buffers. <code>reshape()</code> reuses memory if capacity suffices. DefaultInitAlloc skips zero-fill since GEMM writes every element.</p>
+    </div>
+    `,
+    children: ["im2col", "gemm_decisions", "epilogue", "residual", "shortcuts"]
+},
+
+// ─── IM2COL ───
+"im2col": {
+    label: "Step 1: im2col (uint8 byte copies)", icon: "📋", badge: "U8", badgeClass: "badge-u8",
+    title: "im2col: Reshape Input for Matrix Multiply",
+    subtitle: "Unrolls conv patches into columns — operates on bytes, not floats",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Input (layer1)</h4><div class="val val-green">[1, 64, 32, 32]</div><div class="sub">64 KB uint8</div></div>
+        <div class="info-card"><h4>col_u8 (layer1)</h4><div class="val val-green">[576 &times; 1024]</div><div class="sub">576 KB uint8</div></div>
+        <div class="info-card"><h4>VTune: time</h4><div class="val val-blue">10.4%</div><div class="sub">of total inference</div></div>
+        <div class="info-card"><h4>VTune: FE Bound</h4><div class="val val-red">36.3%</div><div class="sub">DSB/icache misses from branches</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>What im2col does</h3>
+        <p>For each 3&times;3 kernel position at each spatial location, copies the input value into a column matrix. This transforms convolution into a single matrix multiply (GEMM). For 3&times;3 stride-1 pad-1, each "row" is just a shifted copy of an input row &mdash; we use <code>memcpy</code> per row.</p>
+        <pre>col_rows = IC &times; kH &times; kW = 64 &times; 3 &times; 3 = 576
+col_cols = OH &times; OW = 32 &times; 32 = 1024
+For each (channel, kh, kw):
+  For each output row:
+    memcpy shifted input row to col_u8 (31-32 bytes)</pre>
+    </div>
+    <div class="detail-section">
+        <h3>Why uint8 matters here</h3>
+        <p>im2col copies raw bytes. FP32 im2col would move 4&times; more data (2.3 MB vs 576 KB for layer1). This is one of the biggest wins from INT8-resident execution.</p>
+    </div>
+    `,
+    children: ["im2col_3x3_specialized", "repack", "im2col_alt_fused_gemm", "im2col_alt_fused_packed", "im2col_alt_unrolled"]
+},
+
+"im2col_3x3_specialized": {
+    label: "3×3 s1p1 specialization (Exp 12)", icon: "✓", badge: "-23%", badgeClass: "badge-win",
+    title: "Specialized 3&times;3 Stride-1 Pad-1 im2col",
+    subtitle: "memcpy per row instead of per-element bounds checks",
+    content: `
+    <div class="decision-win">
+        <h4>Experiment 12: 5.4ms (from 7ms) &mdash; biggest im2col win</h4>
+        <p>Generic im2col checks bounds per element (branches). For 3&times;3 s1p1 (12 of 16 ternary convs), each row is a shifted copy of the input. Replace per-element branches with one memcpy(31-32 bytes) per row + memset for padding rows. im2col dropped from 30% &rarr; 7.4% of time.</p>
+    </div>
+    <pre>// Before: per-element with bounds check
+for each (c, kh, kw, oh, ow):
+  col[idx++] = (in_bounds) ? input[...] : 0;  // branch per element!
+
+// After: memcpy per row
+for each (c, kh, kw):
+  for each oh:
+    if (padding_row) memset(dst, 0, 32);
+    else memcpy(dst, input_row + shift, 31);</pre>
+    `,
+    children: []
+},
+
+"im2col_alt_fused_gemm": {
+    label: "Alt: Fused implicit GEMM (Exp 14)", icon: "✗", badge: "58ms!", badgeClass: "badge-fail",
+    title: "Failed: Fused Implicit GEMM &mdash; Gather Bytes Inside GEMM Loop",
+    subtitle: "Eliminate im2col+repack entirely by computing addresses on-the-fly",
+    content: `
+    <div class="decision-fail">
+        <h4>Experiment 14: 58ms (13&times; slower than baseline 4.5ms)</h4>
+        <p>Idea: skip im2col and repack, compute input addresses inside the dpbusd loop using precomputed mapping tables. Each GEMM iteration gathers bytes from scattered input locations.</p>
+        <p style="margin-top:8px;"><strong>Why it failed:</strong> Scattered byte reads with index arithmetic destroy the sequential access pattern. Each byte access requires: decode (c,kh,kw) from reduction index, compute input row/col, bounds check, load byte. This is 5-10 instructions per byte vs memcpy's 1 instruction per 32 bytes.</p>
+    </div>
+    <div class="decision-info">
+        <h4>How oneDNN makes this work</h4>
+        <p>oneDNN uses a <strong>JIT compiler</strong> that generates specialized machine code for each layer's dimensions. The JIT emits prefetch instructions at compile time (not runtime) and unrolls the address computation. We can't replicate this without a JIT framework.</p>
+    </div>
+    `,
+    children: []
+},
+
+"im2col_alt_fused_packed": {
+    label: "Alt: Fused im2col→col_packed", icon: "✗", badge: "+74%", badgeClass: "badge-fail",
+    title: "Failed: Fused im2col &rarr; col_packed (Skip col_u8 Buffer)",
+    subtitle: "Read input directly during repack, one pass instead of two",
+    content: `
+    <div class="decision-fail">
+        <h4>Result: 114.9 &mu;s vs 66.1 &mu;s baseline (+74% slower)</h4>
+        <p>Idea: skip the intermediate col_u8 buffer. For each group of 4 reduction rows and 8 spatial positions, decode (c,kh,kw), compute input pointers, handle padding, load 8 bytes, SSE interleave, store to col_packed.</p>
+    </div>
+    <table>
+        <tr><th>Metric (layer1, perf stat)</th><th>Baseline</th><th>Fused</th></tr>
+        <tr><td>Median latency</td><td class="best">66.1 &mu;s</td><td class="worst">114.9 &mu;s (+74%)</td></tr>
+        <tr><td>Instructions</td><td class="best">956K</td><td class="worst">2,885K (3.0&times;)</td></tr>
+        <tr><td>Cycles</td><td class="best">313K</td><td class="worst">517K</td></tr>
+        <tr><td>IPC</td><td>3.05</td><td class="best">5.58</td></tr>
+        <tr><td>L1 miss rate</td><td>1.45%</td><td class="best">0.018%</td></tr>
+    </table>
+    <div class="decision-info">
+        <h4>Paradox: Better IPC + better cache = slower</h4>
+        <p>The fused approach has near-zero cache misses (data locality is great!) and very high IPC (5.58). But it executes <strong>3&times; more instructions</strong> due to per-group address arithmetic (decode c/kh/kw, compute row pointers, padding checks, edge-case scalar fallback). Instruction count dominates: 956K &times; 0.33 cyc &lt; 2885K &times; 0.18 cyc.</p>
+    </div>
+    `,
+    children: []
+},
+
+"im2col_alt_unrolled": {
+    label: "Alt: Unrolled 9-pos + inline AVX2", icon: "✗", badge: "+50%", badgeClass: "badge-fail",
+    title: "Failed: Unrolled 9 Kernel Positions + Inline AVX2 Row Copies",
+    subtitle: "Eliminate kh/kw loop and glibc memcpy dispatch overhead",
+    content: `
+    <div class="decision-fail">
+        <h4>Result: 99.0 &mu;s vs 66.1 &mu;s baseline (+50% slower)</h4>
+        <p>Idea: the VTune showed 36% front-end bound in im2col, caused by glibc memcpy's dispatch logic for small copies (31 bytes). Unroll the 9 kernel positions (3&times;3) into 9 explicit function calls, replacing memcpy with inline AVX2 load/store.</p>
+    </div>
+    <table>
+        <tr><th>Metric (layer1, perf stat)</th><th>Baseline</th><th>Unrolled</th></tr>
+        <tr><td>Median latency</td><td class="best">66.1 &mu;s</td><td class="worst">99.0 &mu;s (+50%)</td></tr>
+        <tr><td>Instructions</td><td class="best">956K</td><td class="worst">2,138K (2.2&times;)</td></tr>
+        <tr><td>Cycles</td><td class="best">313K</td><td class="worst">459K</td></tr>
+        <tr><td>IPC</td><td>3.05</td><td>4.66</td></tr>
+        <tr><td>L1 icache misses</td><td>32</td><td>60</td></tr>
+    </table>
+    <div class="decision-info">
+        <h4>Why: glibc memcpy's rep movsb beats inline SIMD for 32-byte copies</h4>
+        <p>For 31-32 byte rows, glibc memcpy uses <code>rep movsb</code>: a single instruction that copies the entire row. Inline AVX2 (<code>loadu_si256 + storeu_si256</code>) is 2 instructions for 32 bytes. Plus the 9&times; unrolling inflates code size, increasing icache pressure.</p>
+    </div>
+    `,
+    children: []
+},
+
+// ─── REPACK ───
+"repack": {
+    label: "Step 2: SSE Repack (spatial-packed)", icon: "🔀", badge: "SIMD", badgeClass: "badge-simd",
+    title: "SSE Repack: 4&times;8 Byte Transpose for dpbusd Layout",
+    subtitle: "Transforms col_u8 [reduction][spatial] &rarr; col_packed [jg][kg][32B]",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Input (layer1)</h4><div class="val val-green">col_u8</div><div class="sub">[576 &times; 1024] = 576 KB</div></div>
+        <div class="info-card"><h4>Output (layer1)</h4><div class="val val-blue">col_packed</div><div class="sub">[128 &times; 144 &times; 32B] = 576 KB</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>The Layout Transformation</h3>
+        <pre>col_u8 layout:     [reduction_row][spatial_col]  (row-major)
+col_packed layout: [jg][kg][32 bytes]
+  jg = spatial group of 8 (0..127 for layer1)
+  kg = reduction group of 4 (0..143 for layer1)
+  32 bytes = 8 lanes &times; 4 rows interleaved:
+    [s0r0 s0r1 s0r2 s0r3  s1r0 s1r1 s1r2 s1r3  ... s7r0 s7r1 s7r2 s7r3]
+
+This is a 4&times;8 byte transpose per block.</pre>
+        <h3>SSE Implementation (Experiment 17)</h3>
+        <pre>// 4 loads (8 bytes each from 4 consecutive reduction rows)
+v0 = _mm_loadl_epi64(row0 + j)  // 8 spatial from row 0
+v1 = _mm_loadl_epi64(row1 + j)  // 8 spatial from row 1
+v2 = _mm_loadl_epi64(row2 + j)
+v3 = _mm_loadl_epi64(row3 + j)
+
+// 3 shuffles (interleave bytes)
+lo01 = _mm_unpacklo_epi8(v0, v1)   // [r0s0,r1s0,r0s1,r1s1,...]
+lo23 = _mm_unpacklo_epi8(v2, v3)   // [r2s0,r3s0,r2s1,r3s1,...]
+result_lo = _mm_unpacklo_epi16(lo01, lo23)  // first 4 spatial
+result_hi = _mm_unpackhi_epi16(lo01, lo23)  // next 4 spatial
+
+// 2 stores (16 bytes each)
+_mm_storeu_si128(out, result_lo)
+_mm_storeu_si128(out+16, result_hi)</pre>
+        <p>Total: 4 loads + 3 shuffles + 2 stores = 9 instructions per 32 bytes. Repack dropped from 22.8% to ~16% of time.</p>
+    </div>
+    `,
+    children: []
+},
+
+// ─── GEMM DECISIONS ───
+"gemm_decisions": {
+    label: "Step 3: dpbusd GEMM (core computation)", icon: "⚡", badge: "73%", badgeClass: "badge-ms",
+    title: "dpbusd GEMM: The Core Computation (73% of time)",
+    subtitle: "Every design decision leads here",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>Instruction</h4><div class="val val-blue">dpbusd</div><div class="sub">_mm256_dpbusd_epi32</div></div>
+        <div class="info-card"><h4>Throughput</h4><div class="val val-green">32 MACs/cycle</div><div class="sub">8 lanes &times; 4 reductions</div></div>
+        <div class="info-card"><h4>CPI</h4><div class="val val-green">0.179</div><div class="sub">IPC = 5.6, Retiring = 82%</div></div>
+        <div class="info-card"><h4>Time share</h4><div class="val val-blue">73.1%</div><div class="sub">Near-theoretical peak</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>The dpbusd Inner Loop</h3>
+        <pre>for each OC_tile (16 OCs):        // 16 YMM accumulators
+  for each spatial_group (8 pos):   // 1 activation load reused 16&times;
+    for each reduction_group:       // accumulate
+      a = load 32B from col_packed  // 8 spatial &times; 4 reduction
+      for oc in 0..15:
+        w = broadcast weight_packed[oc][kg]  // 4 bytes &rarr; all lanes
+        acc[oc] = dpbusd(acc[oc], a, w)      // 32 MACs, 1 cycle</pre>
+    </div>
+    <div class="bar-chart">
+        <div style="width:82.2%;background:#2563eb;">Retiring 82.2%</div>
+        <div style="width:1.3%;background:#f59e0b;">FE 1.3%</div>
+        <div style="width:5.8%;background:#8b5cf6;">Mem 5.8%</div>
+        <div style="width:10.7%;background:#ef4444;">Core 10.7%</div>
+    </div>
+    <p style="font-size:11px; color:#64748b;">Pipeline slot utilization: 82% doing useful work. Only 6% memory stalls, 11% core bound (register pressure at 16 YMM).</p>
+    `,
+    children: ["gemm_spatial_packed", "gemm_alt_reduction_major", "gemm_alt_ternary_tricks", "gemm_tiling"]
+},
+
+"gemm_spatial_packed": {
+    label: "Spatial-packed layout (Exp 7)", icon: "✓", badge: "BREAKTHROUGH", badgeClass: "badge-win",
+    title: "Spatial-Packed dpbusd Layout (The Key Innovation)",
+    subtitle: "8 spatial &times; 4 reduction per instruction &mdash; no horizontal reduction",
+    content: `
+    <div class="decision-win">
+        <h4>Experiment 7: 17ms &rarr; 9ms (1.75&times; GEMM speedup)</h4>
+        <p>Each YMM lane processes a <em>different</em> spatial position. Results land directly in the correct lane. Zero horizontal reductions (shuffle+hadd) needed.</p>
+    </div>
+    <table>
+        <tr><th>Metric</th><th>Before (reduction-major)</th><th>After (spatial-packed)</th></tr>
+        <tr><td>CPI</td><td>0.294</td><td class="best">0.179</td></tr>
+        <tr><td>Retiring</td><td>54.0%</td><td class="best">82.2%</td></tr>
+        <tr><td>Port 6 pressure</td><td class="worst">54.6% (saturated)</td><td class="best">resolved</td></tr>
+        <tr><td>Split Loads</td><td>6%</td><td class="best">1%</td></tr>
+    </table>
+    `,
+    children: []
+},
+
+"gemm_alt_reduction_major": {
+    label: "Alt: Reduction-major dpbusd (Exp 2)", icon: "✗", badge: "Port 6", badgeClass: "badge-fail",
+    title: "Failed (Initially): Reduction-Major dpbusd Layout",
+    subtitle: "32 MACs along reduction dimension, horizontal reduce after",
+    content: `
+    <div class="decision-fail">
+        <h4>Experiment 2: 17ms &mdash; Port 6 saturated at 55%</h4>
+        <p>dpbusd processes 32 values along the reduction dimension for ONE spatial position. Result: 8 partial sums in YMM lanes that must be horizontally reduced (shuffle+hadd). The shuffle instructions go through port 6, which becomes the bottleneck.</p>
+    </div>
+    <pre>// Reduction-major: 1 spatial pos, 32 reductions
+acc = dpbusd(act[sp][0:31], weight[0:31])  // 8 partial sums in lanes
+result = hreduce(acc)  // EXPENSIVE: shuffle + hadd on port 6
+// port 6 at 55% &mdash; single-port bottleneck</pre>
+    `,
+    children: []
+},
+
+"gemm_alt_ternary_tricks": {
+    label: "Alt: Ternary-specific tricks (Exp 3-6)", icon: "✗", badge: "ALL SLOWER", badgeClass: "badge-fail",
+    title: "Failed: Every Ternary-Specific Compute Trick",
+    subtitle: "The hardware multiplier is free &mdash; can't beat dpbusd by skipping it",
+    content: `
+    <table>
+        <tr><th>Approach</th><th>Latency (1T)</th><th>Why it failed</th></tr>
+        <tr><td>INT16 add/sub (Exp 3)</td><td class="worst">17.5ms</td><td>16 ops/instr vs dpbusd's 32. Half throughput.</td></tr>
+        <tr><td>sign_epi16 (Exp 3)</td><td class="worst">17.5ms</td><td>Same port 6 bottleneck as hreduce.</td></tr>
+        <tr><td>Sparse pos/neg lists (Exp 3)</td><td class="worst">17.9ms</td><td>Random index access destroys cache locality.</td></tr>
+        <tr><td>FP32 add/sub (Exp 4)</td><td class="worst">81ms</td><td>8 ops/instr (add_ps) vs 32. 4&times; less throughput.</td></tr>
+        <tr><td>8-OC INT16 tiling (Exp 5)</td><td class="worst">68ms</td><td>8 accumulators &times; 1024 spatial = 16KB &gt; L1.</td></tr>
+        <tr><td>3-group BitNet TL2 (Exp 6)</td><td class="worst">20.8ms (1T)</td><td>Better MT but worse 1T than dpbusd.</td></tr>
+        <tr><td>4-bit sign+add (Exp 18)</td><td class="worst">32.9ms</td><td>165.8B insns vs 20.3B. 8.2&times; instruction gap.</td></tr>
+    </table>
+    <div class="decision-info">
+        <h4>The fundamental insight</h4>
+        <p>On VNNI hardware, dpbusd delivers 32 MACs/instruction with 1-cycle throughput. The multiply is "free" &mdash; it runs at the same speed whether weights are {-1,0,+1} or arbitrary int8. Every attempt to exploit ternary simplicity (skip multiply, use add/sub, use lookup tables) produces <em>fewer</em> operations per instruction, which is strictly worse.</p>
+    </div>
+    `,
+    children: []
+},
+
+"gemm_tiling": {
+    label: "16-OC tiling (register limit)", icon: "✓", badge: "16 YMM", badgeClass: "badge-win",
+    title: "16-OC Tiling: Using All 16 YMM Registers",
+    subtitle: "Each activation load reused across 16 output channels",
+    content: `
+    <div class="decision-win">
+        <h4>Why exactly 16</h4>
+        <p>Raptor Lake has 16 YMM (256-bit) registers. With 16 OC accumulators, each uses one register. The activation (1 load) is reused across all 16 OCs. Result: activation bandwidth reduced 16&times;.</p>
+    </div>
+    <table>
+        <tr><th>Tiling</th><th>Registers</th><th>Activation reuse</th><th>Problem</th></tr>
+        <tr><td>No tiling (1 OC)</td><td>1 acc</td><td>1&times;</td><td>Reload activation for each OC</td></tr>
+        <tr><td>8-OC</td><td>8 acc</td><td>8&times;</td><td>Wastes half the register file</td></tr>
+        <tr style="background:#052e16;"><td class="best">16-OC (chosen)</td><td>16 acc</td><td class="best">16&times;</td><td>Uses all registers</td></tr>
+        <tr><td>32-OC</td><td>32 acc</td><td>32&times;</td><td class="worst">Spills to stack (only 16 regs)</td></tr>
+    </table>
+    `,
+    children: []
+},
+
+// ─── EPILOGUE ───
+"epilogue": {
+    label: "Step 4: Fused Epilogue (in GEMM loop)", icon: "🔗", badge: "FUSED", badgeClass: "badge-win",
+    title: "Fused Epilogue: Dequant + ReLU + Requant Inside GEMM Output Loop",
+    subtitle: "Zero intermediate tensors &mdash; everything happens in registers",
+    content: `
+    <div class="detail-section">
+        <h3>Three Epilogue Modes</h3>
+        <table>
+            <tr><th>Mode</th><th>Used for</th><th>Operations (all in-register)</th></tr>
+            <tr><td>0: FP32 output</td><td>Shortcut convs</td><td>i32 &rarr; f32 (dequant &times; scale + bias) &rarr; store float</td></tr>
+            <tr><td>1: ReLU + requant</td><td>Conv1 in each block</td><td>i32 &rarr; f32 &rarr; ReLU &rarr; clamp[0,255] &rarr; u8</td></tr>
+            <tr><td>2: Residual + ReLU + requant</td><td>Conv2 in each block</td><td>i32 &rarr; f32 &rarr; + residual &rarr; ReLU &rarr; u8</td></tr>
+        </table>
+        <pre>// Mode 2 example (inside GEMM output loop):
+__m256 val = _mm256_fmadd_ps(cvtepi32_ps(acc), dequant, bias);  // i32&rarr;f32
+val = _mm256_add_ps(val, residual_fp32);                         // + residual
+val = _mm256_max_ps(val, zero);                                   // ReLU
+i32 = _mm256_cvtps_epi32(_mm256_mul_ps(val, inv_scale));         // requant
+// pack i32&rarr;u8 via packus_epi32 + packus_epi16
+_mm_storel_epi64(dst, packed_u8);                                 // store 8 uint8</pre>
+    </div>
+    <div class="decision-win">
+        <h4>Impact: Eliminated 3 separate passes over output tensor</h4>
+        <p>Without fusion, each step (dequant, add, ReLU, requant) would read+write the full output. With 64KB output at layer1, that's 4 extra passes &times; 64KB = 256KB of wasted memory traffic.</p>
+    </div>
+    `,
+    children: []
+},
+
+// ─── RESIDUAL ───
+"residual": {
+    label: "Residual Connection (add + ReLU)", icon: "➕", badge: "FUSED", badgeClass: "badge-win",
+    title: "Residual Connection: Identity or Shortcut",
+    subtitle: "Added inside the GEMM epilogue (mode 2), not as a separate pass",
+    content: `
+    <div class="detail-section">
+        <h3>Two cases</h3>
+        <ul>
+            <li><strong>Identity shortcut (5 of 8 blocks):</strong> Residual = input x (uint8). Dequant on-the-fly: <code>_mm256_cvtepu8_epi32 &times; scale</code>. Added to conv2 output in the epilogue.</li>
+            <li><strong>1&times;1 conv shortcut (3 blocks: layer2.0, 3.0, 4.0):</strong> Shortcut conv produces FP32 output. Added directly to conv2's FP32 intermediate in the epilogue.</li>
+        </ul>
+    </div>
+    `,
+    children: []
+},
+
+// ─── SHORTCUTS ───
+"shortcuts": {
+    label: "Shortcut Convs via dpbusd (Exp 15)", icon: "✓", badge: "-9%", badgeClass: "badge-win",
+    title: "Shortcut Convs: FP32 Weights Quantized to INT8 at Load",
+    subtitle: "Eliminated all FP32 GEMM except first conv",
+    content: `
+    <div class="decision-win">
+        <h4>Experiment 15: 4.9ms &rarr; 4.5ms (Engine::forward: 20.8% &rarr; 3.0%)</h4>
+        <p>Shortcut convs (1&times;1, stride 2) originally used FP32 weights with FP32 GEMM. Solution: quantize FP32 weights to INT8 at model load (per-channel symmetric: w_scale = max(|w|)/127), then route through the same dpbusd spatial-packed path as ternary convs.</p>
+    </div>
+    <table>
+        <tr><th>Shortcut</th><th>OC &times; IC</th><th>Weight size (INT8)</th></tr>
+        <tr><td>layer2.0</td><td>128 &times; 64</td><td>8 KB</td></tr>
+        <tr><td>layer3.0</td><td>256 &times; 128</td><td>32 KB</td></tr>
+        <tr><td>layer4.0</td><td>512 &times; 256</td><td>128 KB</td></tr>
+    </table>
+    `,
+    children: []
+},
+
+// ─── FINAL LAYERS ───
+"avgpool_fc": {
+    label: "AvgPool + FC → Logits", icon: "🎯", badge: "FP32", badgeClass: "badge-fp32",
+    title: "Global Average Pool + Fully Connected Layer",
+    subtitle: "Final classification: uint8 → FP32 → 10 logits",
+    content: `
+    <div class="info-grid">
+        <div class="info-card"><h4>AvgPool input</h4><div class="val val-green">[1, 512, 4, 4]</div><div class="sub">8 KB uint8, 76% zeros</div></div>
+        <div class="info-card"><h4>Pooled</h4><div class="val val-yellow">[512]</div><div class="sub">2 KB float32</div></div>
+        <div class="info-card"><h4>FC</h4><div class="val val-yellow">512 &rarr; 10</div><div class="sub">FP32 matmul + bias</div></div>
+        <div class="info-card"><h4>Output</h4><div class="val val-yellow">[10] logits</div><div class="sub">argmax = prediction</div></div>
+    </div>
+    <div class="detail-section">
+        <h3>AvgPool from uint8</h3>
+        <pre>for each channel:
+  int32_sum = sum of all uint8 values in 4&times;4 spatial
+  pooled[ch] = int32_sum &times; scale / 16.0</pre>
+        <p>Tiny: 512 channels &times; 16 spatial = 8192 additions. Not worth optimizing.</p>
+    </div>
+    `,
+    children: []
+}
+
+}; // end nodes
+
+// ══════════════════════════════════════════════════════════════
+// TREE RENDERING
+// ══════════════════════════════════════════════════════════════
+
+// Tree structure (separate from content for rendering order)
+const treeStructure = [
+    { id: "input", children: [
+        { id: "conv1", children: [
+            { id: "conv1_alt_int8" },
+            { id: "relu1", children: [
+                { id: "quantize", children: [
+                    { id: "quantize_alt_dynamic" },
+                    { id: "block_pipeline", children: [
+                        { id: "im2col", children: [
+                            { id: "im2col_3x3_specialized" },
+                            { id: "repack" },
+                            { id: "im2col_alt_fused_gemm" },
+                            { id: "im2col_alt_fused_packed" },
+                            { id: "im2col_alt_unrolled" },
+                        ]},
+                        { id: "gemm_decisions", children: [
+                            { id: "gemm_spatial_packed" },
+                            { id: "gemm_alt_reduction_major" },
+                            { id: "gemm_alt_ternary_tricks" },
+                            { id: "gemm_tiling" },
+                        ]},
+                        { id: "epilogue" },
+                        { id: "residual" },
+                        { id: "shortcuts" },
+                    ]},
+                ]},
+            ]},
+        ]},
+        { id: "avgpool_fc" },
+    ]}
+];
+
+let activeNodeId = null;
+const openNodes = new Set(["input", "conv1", "relu1", "quantize", "block_pipeline"]);
+
+function renderTree(items, container) {
+    items.forEach(item => {
+        const node = nodes[item.id];
+        const hasChildren = item.children && item.children.length > 0;
+        const isOpen = openNodes.has(item.id);
+
+        const div = document.createElement('div');
+        div.className = 'tree-node';
+
+        const btn = document.createElement('button');
+        btn.className = 'node-btn' + (activeNodeId === item.id ? ' active' : '');
+        btn.innerHTML = `
+            <span class="toggle-btn">${hasChildren ? (isOpen ? '▾' : '▸') : '·'}</span>
+            <span class="icon">${node.icon}</span>
+            <span>${node.label}</span>
+            <span class="badge ${node.badgeClass}">${node.badge}</span>
+        `;
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            if (hasChildren) {
+                if (openNodes.has(item.id)) openNodes.delete(item.id);
+                else openNodes.add(item.id);
+            }
+            activeNodeId = item.id;
+            rebuildTree();
+            showDetail(item.id);
+        };
+        div.appendChild(btn);
+
+        if (hasChildren && isOpen) {
+            const childDiv = document.createElement('div');
+            childDiv.className = 'tree-children';
+            renderTree(item.children, childDiv);
+            div.appendChild(childDiv);
+        }
+
+        container.appendChild(div);
+    });
+}
+
+function rebuildTree() {
+    const tree = document.getElementById('tree');
+    tree.innerHTML = '';
+    renderTree(treeStructure, tree);
+}
+
+function showDetail(id) {
+    const node = nodes[id];
+    const panel = document.getElementById('detailContent');
+    panel.innerHTML = `
+        <h2>${node.title}</h2>
+        <p class="subtitle">${node.subtitle}</p>
+        ${node.content}
+    `;
+}
+
+// Init
+rebuildTree();
+</script>
+</body>
+</html>
