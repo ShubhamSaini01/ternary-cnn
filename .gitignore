@@ -56,3 +56,18 @@ inference/benchmark_hybrid
 sym_shape_infer_temp.onnx
 claude_install.sh
 *.h.bak
+
+# ========================
+# Private / sensitive
+# ========================
+mailThread.md
+Stellon*.pdf
+CLAUDE.md
+CLAUDE_old.md
+.claude/
+
+# ========================
+# Local backup copies
+# ========================
+*_old.*
+*_old

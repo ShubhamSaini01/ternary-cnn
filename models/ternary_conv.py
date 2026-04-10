@@ -26,7 +26,7 @@ class TernaryQuantize(torch.autograd.Function):
         # Mean over all dims except out_channels (dim 0)
         delta = 0.7 * abs_weights.mean(dim=(1, 2, 3), keepdim=True)
 
-        # Ternary assignment
+        # Ternary quantization
         ternary = torch.zeros_like(weights)
         ternary[weights > delta] = 1.0
         ternary[weights < -delta] = -1.0

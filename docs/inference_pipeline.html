@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inference Pipeline — Ternary ResNet-18 Engine</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; padding: 40px 20px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 28px; color: #f0f6fc; margin-bottom: 6px; }
+  .subtitle { color: #8b949e; font-size: 14px; margin-bottom: 40px; }
+  h2 { font-size: 20px; color: #f0f6fc; margin: 40px 0 20px; border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+
+  /* Pipeline flow */
+  .pipeline { display: flex; flex-direction: column; gap: 0; align-items: center; }
+  .stage { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 24px; width: 100%; max-width: 900px; position: relative; }
+  .stage-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .stage-num { background: #388bfd; color: #fff; font-weight: 700; font-size: 13px; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .stage-title { font-size: 16px; font-weight: 600; color: #f0f6fc; }
+  .stage-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; margin-left: auto; }
+  .badge-fp32 { background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb44; }
+  .badge-int8 { background: #2ea04322; color: #3fb950; border: 1px solid #2ea04344; }
+  .badge-mixed { background: #d2992222; color: #d29922; border: 1px solid #d2992244; }
+
+  .arrow { display: flex; flex-direction: column; align-items: center; padding: 4px 0; }
+  .arrow-line { width: 2px; height: 20px; background: #30363d; }
+  .arrow-head { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #30363d; }
+  .arrow-label { font-size: 11px; color: #8b949e; margin-top: 2px; }
+
+  /* Inner flow for stages */
+  .flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; margin: 8px 0; }
+  .flow-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 10px 14px; font-size: 13px; text-align: center; min-width: 100px; }
+  .flow-box.highlight { border-color: #388bfd; background: #388bfd11; }
+  .flow-box.green { border-color: #2ea043; background: #2ea04311; }
+  .flow-box.orange { border-color: #d29922; background: #d2992211; }
+  .flow-arrow { color: #484f58; font-size: 18px; flex-shrink: 0; }
+  .flow-label { font-size: 11px; color: #8b949e; display: block; margin-top: 4px; }
+
+  /* Residual block diagram */
+  .resblock { display: grid; grid-template-columns: 1fr 60px 1fr; gap: 0; align-items: start; margin: 12px 0; }
+  .resblock-main { display: flex; flex-direction: column; gap: 6px; }
+  .resblock-skip { display: flex; flex-direction: column; align-items: center; justify-content: space-between; height: 100%; }
+  .resblock-skip-line { width: 2px; background: #484f58; flex: 1; }
+  .resblock-skip-label { font-size: 11px; color: #8b949e; writing-mode: vertical-lr; transform: rotate(180deg); }
+  .resblock-merge { grid-column: 1 / -1; display: flex; justify-content: center; }
+
+  .mini-box { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-size: 12px; text-align: center; }
+  .mini-box.green { border-color: #2ea043; }
+  .mini-box.blue { border-color: #388bfd; }
+
+  /* Stats bar */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0; }
+  .stat { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; text-align: center; }
+  .stat-value { font-size: 24px; font-weight: 700; color: #f0f6fc; }
+  .stat-value.green { color: #3fb950; }
+  .stat-value.blue { color: #58a6ff; }
+  .stat-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+
+  /* Kernel detail */
+  .kernel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+  @media (max-width: 700px) { .kernel-grid { grid-template-columns: 1fr; } }
+  .kernel-card { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .kernel-card h3 { font-size: 14px; color: #f0f6fc; margin-bottom: 8px; }
+  .kernel-card p { font-size: 13px; color: #8b949e; line-height: 1.5; }
+  .kernel-card code { background: #161b22; padding: 1px 5px; border-radius: 4px; font-size: 12px; color: #79c0ff; }
+
+  /* Comparison diagram */
+  .compare { display: grid; grid-template-columns: 1fr 40px 1fr; gap: 0; align-items: center; margin: 16px 0; }
+  .compare-side { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .compare-side.bad { border-color: #f8514933; }
+  .compare-side.good { border-color: #2ea04366; }
+  .compare-vs { text-align: center; font-weight: 700; color: #484f58; font-size: 14px; }
+  .compare-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .compare-title.red { color: #f85149; }
+  .compare-title.green { color: #3fb950; }
+
+  /* Memory table */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th { background: #161b22; color: #8b949e; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 1px solid #30363d; }
+  td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  tr:last-child td { border-bottom: none; }
+  td:last-child, th:last-child { text-align: right; }
+  .mono { font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 12px; color: #79c0ff; }
+
+  /* Timing bar chart */
+  .timing-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .timing-label { font-size: 12px; color: #8b949e; width: 180px; text-align: right; flex-shrink: 0; }
+  .timing-track { flex: 1; height: 24px; background: #21262d; border-radius: 4px; position: relative; overflow: hidden; }
+  .timing-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 11px; font-weight: 600; color: #fff; }
+  .timing-fill.blue { background: #1f6feb; }
+  .timing-fill.green { background: #2ea043; }
+  .timing-fill.purple { background: #8957e5; }
+  .timing-fill.gray { background: #484f58; }
+
+  .note { font-size: 12px; color: #8b949e; font-style: italic; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Inference Pipeline</h1>
+<p class="subtitle">INT8-Resident Ternary ResNet-18 Engine &mdash; Intel i5-13400F (Raptor Lake, AVX-VNNI)</p>
+
+<!-- Key stats -->
+<div class="stats">
+  <div class="stat">
+    <div class="stat-value green">0.99 ms</div>
+    <div class="stat-label">6-Thread Median Latency</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value blue">3.71 ms</div>
+    <div class="stat-label">1-Thread Median Latency</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">94.46%</div>
+    <div class="stat-label">CIFAR-10 Accuracy</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value green">3.56 MB</div>
+    <div class="stat-label">Model Size (12.5x compression)</div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>End-to-End Data Flow</h2>
+<!-- ============================================================ -->
+
+<div class="pipeline">
+
+  <!-- Stage 1: Input -->
+  <div class="stage">
+    <div class="stage-header">
+      <div class="stage-num">1</div>
+      <div class="stage-title">Conv1 &mdash; FP32 Input Layer</div>
+      <div class="stage-badge badge-fp32">FP32</div>
+    </div>
+    <div class="flow">
+      <div class="flow-box">
+        Input Image<br>
+        <span class="flow-label">[1, 3, 32, 32] FP32</span>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-box">
+        im2col<br>
+        <span class="flow-label">[27, 1024] FP32</span>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-box highlight">
+        FP32 GEMM<br>
+        <span class="flow-label">W[64,27] &times; col</span>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-box green">
+        +Bias &rarr; ReLU &rarr; Quant<br>
+        <span class="flow-label">Fused, &parallel; over 64 OC</span>
+      </div>
+    </div>
+    <p class="note">Output: uint8 [1, 64, 32, 32] + scale &mdash; 0.154 ms (4.1%)</p>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div><div class="arrow-label">uint8 tensor + scale</div></div>
+
+  <!-- Stage 2: BasicBlocks -->
+  <div class="stage">
+    <div class="stage-header">
+      <div class="stage-num">2</div>
+      <div class="stage-title">8&times; BasicBlock &mdash; INT8-Resident Ternary Convolutions</div>
+      <div class="stage-badge badge-int8">INT8</div>
+    </div>
+
+    <p style="font-size:13px; color:#8b949e; margin-bottom:16px;">Each block: two ternary convolutions + residual connection. All activations stay uint8.</p>
+
+    <!-- Conv path -->
+    <div style="display: grid; grid-template-columns: 2fr 80px 1fr; gap: 12px; align-items: stretch;">
+
+      <!-- Main path -->
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <div style="font-size: 12px; color: #58a6ff; font-weight: 600; text-align: center;">Main Path</div>
+
+        <div class="flow-box" style="text-align: left;">
+          <strong style="color:#f0f6fc;">Conv1 Ternary</strong><br>
+          <span class="flow-label" style="display:inline;">
+            im2col (uint8, memcpy-per-row for 3&times;3 s1)
+            &rarr; spatial repack (8&times;4 groups)
+            &rarr; <code>dpbusd</code> GEMM (14-OC unrolled)
+            &rarr; dequant + ReLU + requant &rarr; uint8
+          </span>
+        </div>
+
+        <div style="text-align: center; color: #484f58;">&darr;</div>
+
+        <div class="flow-box" style="text-align: left;">
+          <strong style="color:#f0f6fc;">Conv2 Ternary</strong><br>
+          <span class="flow-label" style="display:inline;">
+            im2col &rarr; spatial repack &rarr; <code>dpbusd</code> GEMM (14-OC)
+            &rarr; dequant (no ReLU yet &mdash; residual add first)
+          </span>
+        </div>
+      </div>
+
+      <!-- Skip connection -->
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;">
+        <div style="font-size: 12px; color: #d29922; font-weight: 600;">Skip</div>
+        <div style="width: 2px; flex: 1; background: #d29922; opacity: 0.4;"></div>
+        <div style="font-size: 11px; color: #8b949e; text-align: center;">identity<br>or 1&times;1<br>INT8 conv</div>
+        <div style="width: 2px; flex: 1; background: #d29922; opacity: 0.4;"></div>
+        <div style="color: #d29922;">&darr;</div>
+      </div>
+
+      <!-- Shortcut detail -->
+      <div style="display: flex; flex-direction: column; gap: 8px; justify-content: center;">
+        <div class="flow-box orange" style="font-size: 12px;">
+          <strong>Identity:</strong> pass-through<br>
+          <span class="flow-label">Same dims &rarr; just reuse pointer</span>
+        </div>
+        <div class="flow-box orange" style="font-size: 12px;">
+          <strong>Downsample:</strong> 1&times;1 conv<br>
+          <span class="flow-label">INT8 <code>dpbusd</code>, same kernel</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Merge -->
+    <div style="margin-top: 12px;">
+      <div class="flow" style="justify-content: center;">
+        <div class="flow-box green" style="min-width: 300px;">
+          <strong>Residual Add + ReLU + Requant</strong><br>
+          <span class="flow-label">Fused SIMD: add &rarr; max(0) &rarr; scale &rarr; clamp [0,255] &rarr; uint8</span>
+        </div>
+      </div>
+    </div>
+
+    <p class="note">im2col + repack: 1.076 ms (28.3%) &mdash; GEMM + epilogue: 2.565 ms (67.6%)</p>
+  </div>
+
+  <div class="arrow"><div class="arrow-line"></div><div class="arrow-head"></div><div class="arrow-label">uint8 [1, 512, 4, 4]</div></div>
+
+  <!-- Stage 3: Pool + FC -->
+  <div class="stage">
+    <div class="stage-header">
+      <div class="stage-num">3</div>
+      <div class="stage-title">Global AvgPool + FC</div>
+      <div class="stage-badge badge-mixed">Mixed</div>
+    </div>
+    <div class="flow">
+      <div class="flow-box">
+        AvgPool<br>
+        <span class="flow-label">uint8 &rarr; FP32 on-the-fly</span>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-box">
+        FC [10, 512]<br>
+        <span class="flow-label">FP32 FMA dot product</span>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-box highlight">
+        10-class logits<br>
+        <span class="flow-label">argmax &rarr; prediction</span>
+      </div>
+    </div>
+    <p class="note">Pool + FC: 0.002 ms (0.1%)</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>The dpbusd GEMM Kernel</h2>
+<!-- ============================================================ -->
+
+<div class="kernel-grid">
+  <div class="kernel-card">
+    <h3>Spatial Packing (8x speedup)</h3>
+    <p>Pack <strong>8 spatial positions</strong> into one YMM register instead of 8 partial sums. Each lane accumulates independently &mdash; no horizontal reduction needed.</p>
+    <div style="margin-top: 12px;">
+      <div class="compare">
+        <div class="compare-side bad">
+          <div class="compare-title red">Naive: hadd required</div>
+          <p style="font-size: 12px; color: #8b949e;">ymm = [s0 s1 s2 ... s7]<br>8 partial sums &rarr; reduce to 1</p>
+        </div>
+        <div class="compare-vs">vs</div>
+        <div class="compare-side good">
+          <div class="compare-title green">Spatial: lane-independent</div>
+          <p style="font-size: 12px; color: #8b949e;">ymm = [p0 p1 p2 ... p7]<br>8 outputs, each lane done</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="kernel-card">
+    <h3>14-OC Register Tiling</h3>
+    <p>Inspired by disassembling ONNX Runtime's MLAS kernel. Keep <strong>14 OC accumulators</strong> live in YMM registers: r0&ndash;r13 + 1 activation + 1 weight = 16 YMM total.</p>
+    <p style="margin-top: 8px;">Inner loop: <code>14 &times; dpbusd</code> = <strong>448 MACs/iteration</strong></p>
+    <p style="margin-top: 4px; font-size: 12px; color: #8b949e;">Each dpbusd: 32 unsigned &times; 32 signed &rarr; 8 int32 accumulators</p>
+  </div>
+
+  <div class="kernel-card">
+    <h3>Specialized im2col (3&times;3 s1p1)</h3>
+    <p>12 of 16 ternary convs use 3&times;3 stride-1 pad-1. Replaced per-element gather with <strong>per-row memcpy</strong>.</p>
+    <p style="margin-top: 8px;"><span style="color:#f85149;">Before:</span> 30% of runtime (scatter)<br>
+    <span style="color:#3fb950;">After:</span> 7.4% of runtime (sequential)</p>
+  </div>
+
+  <div class="kernel-card">
+    <h3>Fused Epilogue Modes</h3>
+    <table style="margin-top: 4px;">
+      <tr><td style="color:#79c0ff;">Mode 0</td><td>dequant &rarr; FP32</td></tr>
+      <tr><td style="color:#79c0ff;">Mode 1</td><td>dequant &rarr; ReLU &rarr; uint8</td></tr>
+      <tr><td style="color:#79c0ff;">Mode 2</td><td>dequant &rarr; +residual &rarr; ReLU &rarr; uint8</td></tr>
+    </table>
+    <p style="margin-top: 8px; font-size: 12px; color: #8b949e;">Zero intermediate buffers. int32 &rarr; final format in one pass.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>Weight Representation</h2>
+<!-- ============================================================ -->
+
+<div class="kernel-grid">
+  <div class="kernel-card">
+    <h3>Storage: 2-bit I2_S</h3>
+    <p>4 weights per byte, MSB first:</p>
+    <p style="margin-top: 8px; font-family: monospace; font-size: 13px; color: #79c0ff;">
+      +1 &rarr; 0b01 &nbsp; 0 &rarr; 0b00 &nbsp; -1 &rarr; 0b11
+    </p>
+    <p style="margin-top: 8px;">44.69 MB &rarr; <strong>3.56 MB</strong> (92.2% reduction)</p>
+  </div>
+  <div class="kernel-card">
+    <h3>Runtime: INT8 + pack4</h3>
+    <p>At init, 2-bit &rarr; int8 {-1, 0, +1}, pre-packed for dpbusd broadcast:</p>
+    <p style="margin-top: 8px; font-family: monospace; font-size: 12px; color: #79c0ff;">
+      pack4(w0,w1,w2,w3) = w0 | w1&lt;&lt;8 | w2&lt;&lt;16 | w3&lt;&lt;24
+    </p>
+    <p style="margin-top: 8px; font-size: 12px; color: #8b949e;">Trades 4x storage at runtime for zero-cost access. Fits in L2.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2>Per-Layer Timing (1T, 200 runs, measured)</h2>
+<!-- ============================================================ -->
+
+<div style="margin: 16px 0;">
+  <div class="timing-bar">
+    <div class="timing-label">Conv1 FP32+ReLU+quant</div>
+    <div class="timing-track"><div class="timing-fill blue" style="width: 4.1%;">0.154ms</div></div>
+  </div>
+  <div class="timing-bar">
+    <div class="timing-label">im2col + repack</div>
+    <div class="timing-track"><div class="timing-fill purple" style="width: 28.3%;">1.076ms (28.3%)</div></div>
+  </div>
+  <div class="timing-bar">
+    <div class="timing-label">dpbusd GEMM + epilogue</div>
+    <div class="timing-track"><div class="timing-fill green" style="width: 67.6%;">2.565ms (67.6%)</div></div>
+  </div>
+  <div class="timing-bar">
+    <div class="timing-label">Pool + FC</div>
+    <div class="timing-track"><div class="timing-fill gray" style="width: 0.5%;"></div></div>
+  </div>
+</div>
+<p style="font-size: 13px; color: #8b949e;">Total 1T: <strong>3.797ms</strong> &nbsp;&mdash;&nbsp; 6T median: <strong>0.99ms</strong> (3.8x scaling, 63% efficiency)</p>
+
+<!-- ============================================================ -->
+<h2>Memory Budget</h2>
+<!-- ============================================================ -->
+
+<table>
+  <thead>
+    <tr><th>Buffer</th><th>Purpose</th><th>Size</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><span class="mono">col_u8</span></td><td>im2col output (uint8)</td><td>4,608 KB</td></tr>
+    <tr><td><span class="mono">col_packed</span></td><td>Spatial-repacked for dpbusd</td><td>4,608 KB</td></tr>
+    <tr><td><span class="mono">ws_u8_{a,b,c}</span></td><td>Activation ping-pong (uint8)</td><td>~192 KB</td></tr>
+    <tr><td><span class="mono">ws_fp32_{a,b}</span></td><td>Conv1 output + shortcut scratch</td><td>~512 KB</td></tr>
+    <tr><td style="font-weight: 700;">Total workspace</td><td>Preallocated once, reused every inference</td><td style="font-weight: 700;">~9.5 MB</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>Threading Model (OpenMP)</h2>
+<!-- ============================================================ -->
+
+<div style="background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin: 16px 0; font-family: 'SF Mono', monospace; font-size: 12px; line-height: 1.8; overflow-x: auto;">
+  <div style="color: #8b949e;">// Single omp parallel region per inference &mdash; threads stay alive across all 8 blocks</div>
+  <br>
+  <div>
+    <span style="color: #8b949e;">T0:</span>
+    <span style="background: #1f6feb33; padding: 2px 6px; border-radius: 3px; color: #58a6ff;">[im2col]</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc0..13]</span>
+    <span style="background: #1f6feb33; padding: 2px 6px; border-radius: 3px; color: #58a6ff;">[im2col]</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc0..13]</span>
+    <span style="color: #484f58;">...</span>
+  </div>
+  <div>
+    <span style="color: #8b949e;">T1:</span>
+    <span style="color: #484f58; padding: 2px 6px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc14..27]</span>
+    <span style="color: #484f58; padding: 2px 6px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc14..27]</span>
+    <span style="color: #484f58;">...</span>
+  </div>
+  <div>
+    <span style="color: #8b949e;">T2:</span>
+    <span style="color: #484f58; padding: 2px 6px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc28..41]</span>
+    <span style="color: #484f58; padding: 2px 6px;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span>
+    <span style="background: #2ea04333; padding: 2px 6px; border-radius: 3px; color: #3fb950;">[GEMM oc28..41]</span>
+    <span style="color: #484f58;">...</span>
+  </div>
+  <div style="color: #484f58;">&nbsp;&nbsp;&nbsp;&nbsp; &uarr; barrier &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &uarr; barrier</div>
+</div>
+
+<div style="font-size: 13px; color: #8b949e; margin-top: 8px;">
+  <strong>Conv1 FP32:</strong> <code>omp for</code> over 64 OC &nbsp;&mdash;&nbsp;
+  <strong>im2col:</strong> <code>omp single</code> (sequential memcpy) &nbsp;&mdash;&nbsp;
+  <strong>GEMM:</strong> <code>omp for</code> over 14-OC tiles
+</div>
+
+<!-- ============================================================ -->
+<h2>Benchmark Comparison (6-Thread, measured)</h2>
+<!-- ============================================================ -->
+
+<table>
+  <thead>
+    <tr><th>Method</th><th>1-Thread</th><th>6-Thread</th><th>Accuracy</th><th>Model Size</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>PyTorch FP32</td><td>11.27 ms</td><td>5.11 ms</td><td>95.54%</td><td>44.69 MB</td></tr>
+    <tr><td>ONNX INT8 Dynamic</td><td>4.38 ms</td><td>2.54 ms</td><td>95.48%</td><td>11.23 MB</td></tr>
+    <tr><td>ONNX INT8 Static</td><td>2.24 ms</td><td>0.88 ms</td><td>95.43%</td><td>11.23 MB</td></tr>
+    <tr style="background: #2ea04311;">
+      <td style="font-weight: 700; color: #3fb950;">C++ Ternary Engine</td>
+      <td style="font-weight: 700;">3.71 ms</td>
+      <td style="font-weight: 700;">0.99 ms</td>
+      <td style="font-weight: 700;">94.46%</td>
+      <td style="font-weight: 700; color: #3fb950;">3.56 MB</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="note">All measurements: median over 200 runs, 50 warmup. Intel i5-13400F, Ubuntu, AVX-VNNI.</p>
+
+</div>
+</body>
+</html>

@@ -104,7 +104,7 @@ def compute_ternary_and_alpha(fp_weights):
     # Threshold per output channel
     delta = 0.7 * abs_w.mean(axis=(1, 2, 3), keepdims=True)
 
-    # Ternary assignment
+    # Ternary quantization
     ternary = np.zeros_like(w)
     ternary[w > delta] = 1.0
     ternary[w < -delta] = -1.0
